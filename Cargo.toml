@@ -1,8 +1,10 @@
 [package]
-name = "bencode"
+name = "bencodex"
 version = "0.1.0"
 authors = ["nomyfan <Nomyfan@live.com>"]
 edition = "2018"
+description = "bencode parser"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
