@@ -108,27 +108,23 @@ fn internal_parse(input: &str) -> Result<(BNode, usize), String> {
 
 fn parse_int(input: &str) -> Result<(BNode, usize), String> {
     let mut val: i64 = 0;
-    let mut positive = true;
+    let mut mul = 1;
     let mut next: usize = 1;
     for c in input.chars().skip(1) {
+        match c {
+            '-' if next == 1 => {
+                mul = -1;
+            }
+            'e' if next != 1 => {
+                return Ok((BNode::Int(val * mul), next + 1));
+            }
+            '0'..='9' => val = val * 10 + (c.to_digit(10).unwrap()) as i64,
+            _ => return Err(format!("Invalid number, starting point: {}", input)),
+        }
         next = next + 1;
-        if c == 'e' {
-            break;
-        }
-        if c == '-' {
-            positive = false;
-        }
-        match c.to_digit(10) {
-            Some(d) => val = val * 10 + d as i64,
-            None => return Err("Invalid integer".to_string()),
-        }
     }
 
-    if !positive {
-        val = -val;
-    }
-
-    Ok((BNode::Int(val), next))
+    Err(format!("Missing ending 'e', starting point: {}", input))
 }
 
 fn parse_string(input: &str) -> Result<(BNode, usize), String> {
@@ -212,17 +208,27 @@ mod tests {
 
     #[test]
     fn test_primitive_int() {
-        use crate::BNode;
-        let result = crate::parse_int("i2147483648e");
-        match result {
-            Ok((bint, n1)) => match bint {
-                BNode::Int(i) => {
-                    assert_eq!(i, 2147483648);
-                    assert_eq!("i2147483648e".len(), n1);
+        let cases = vec!["i2147483648e", "i-253e"];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(bint) => {
+                    if let crate::BNode::Int(i) = bint {
+                        assert_eq!(i, x[1..x.len() - 1].parse::<i64>().unwrap());
+                    }
                 }
-                _ => panic!("Wrong type"),
-            },
-            Err(e) => panic!(e),
+                Err(e) => panic!(e),
+            }
+        }
+    }
+
+    #[test]
+    fn test_primitive_int_failed() {
+        let failed_cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
+        for x in &failed_cases {
+            match crate::parse(x) {
+                Ok(_) => panic!("Should failed"),
+                Err(_) => (),
+            }
         }
     }
 
