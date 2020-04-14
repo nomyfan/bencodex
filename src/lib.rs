@@ -102,7 +102,7 @@ fn internal_parse(input: &str) -> Result<(BNode, usize), String> {
         'd' => parse_map(input),
         '0'..='9' => parse_string(input),
         'i' => parse_int(input),
-        _ => Err("Undefined stopword".to_string()),
+        _ => Err(format!("Undefined delimiter: {}", desc)),
     }
 }
 
@@ -128,24 +128,32 @@ fn parse_int(input: &str) -> Result<(BNode, usize), String> {
 }
 
 fn parse_string(input: &str) -> Result<(BNode, usize), String> {
-    let mut len = 0;
-    let mut next = 1;
+    let mut len: usize = 0;
+    let mut next: usize = 1;
     for c in input.chars() {
-        if c == ':' {
-            break;
+        match c {
+            ':' => {
+                return if next + len > input.len() {
+                    Err(format!(
+                        "String's length is shorter than expected, starting point: {}",
+                        input
+                    ))
+                } else {
+                    let mut ret = String::new();
+                    ret.push_str(&input[next..(next + len)]);
+                    Ok((BNode::Str(ret), next + len))
+                }
+            }
+            '0'..='9' => len = len * 10 + c.to_digit(10).unwrap() as usize,
+            _ => return Err(format!("Bad string is given, starting point: {}", input)),
         }
         next = next + 1;
-        match c.to_digit(10) {
-            Some(d) => len = len * 10 + d,
-            None => return Err("Bad string length is given".to_string()),
-        }
     }
 
-    let mut ret = String::new();
-    ret.push_str(&input[next..(next + len as usize)]);
-    next = next + len as usize;
-
-    Ok((BNode::Str(ret), next))
+    Err(format!(
+        "Missing ':' in the string, starting point: {}",
+        input
+    ))
 }
 
 fn parse_list(input: &str) -> Result<(BNode, usize), String> {
@@ -223,8 +231,8 @@ mod tests {
 
     #[test]
     fn test_primitive_int_failed() {
-        let failed_cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
-        for x in &failed_cases {
+        let cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
+        for x in &cases {
             match crate::parse(x) {
                 Ok(_) => panic!("Should failed"),
                 Err(_) => (),
@@ -235,16 +243,28 @@ mod tests {
     #[test]
     fn test_primitive_string() {
         use crate::BNode;
-        let result = crate::parse_string("5:hello");
-        match result {
-            Ok((node, next)) => match node {
-                BNode::Str(v) => {
-                    assert_eq!("hello", &v[..]);
-                    assert_eq!(7, next);
+        let cases = vec!["4:halo"];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(node) => {
+                    if let BNode::Str(v) = node {
+                        let index = x.find(':').unwrap();
+                        assert_eq!(&x[index + 1..], &v[..]);
+                    }
                 }
-                _ => panic!("Wrong type"),
-            },
-            Err(e) => panic!(e),
+                Err(e) => panic!(e),
+            }
+        }
+    }
+
+    #[test]
+    fn test_primitive_string_failed() {
+        let cases = vec!["5:hello2", "5:halo", "521"];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(_) => panic!("Should fail"),
+                Err(_) => (),
+            }
         }
     }
 
