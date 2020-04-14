@@ -159,17 +159,19 @@ fn parse_string(input: &str) -> Result<(BNode, usize), String> {
 fn parse_list(input: &str) -> Result<(BNode, usize), String> {
     let mut nodes = vec![];
     let mut next = 1;
-    loop {
+    while next < input.len() {
+        if "e" == &input[next..next + 1] {
+            return Ok((BNode::List(nodes), next + 1));
+        }
         let (node, n) = internal_parse(&input[next..])?;
         next = next + n;
         nodes.push(node);
-        if "e" == &input[next..next + 1] {
-            next = next + 1;
-            break;
-        }
     }
 
-    Ok((BNode::List(nodes), next))
+    Err(format!(
+        "Missing 'e' at the end of list, starting point: {}",
+        input
+    ))
 }
 
 fn parse_map(input: &str) -> Result<(BNode, usize), String> {
@@ -270,15 +272,23 @@ mod tests {
 
     #[test]
     fn test_list() {
-        let input = "l4:spami42ee";
-        let len = input.len();
-        let result = crate::parse_list(&input);
-        match result {
-            Ok((node, next)) => {
-                assert_eq!(len, next);
-                assert_eq!(&format!("{}", node), &input);
+        let cases = vec!["l4:spami42ee", "le"];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(node) => assert_eq!(x, &format!("{}", node)),
+                Err(e) => panic!(e),
             }
-            Err(e) => panic!(e),
+        }
+    }
+
+    #[test]
+    fn test_list_failed() {
+        let cases = vec!["l4:halo"];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(_) => panic!("Should fail"),
+                Err(_) => (),
+            }
         }
     }
 
