@@ -236,7 +236,7 @@ mod tests {
         let cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
         for x in &cases {
             match crate::parse(x) {
-                Ok(_) => panic!("Should failed"),
+                Ok(_) => panic!("Should fail"),
                 Err(_) => (),
             }
         }
