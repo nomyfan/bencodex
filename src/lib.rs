@@ -96,6 +96,9 @@ pub fn parse(input: &str) -> Result<BNode, String> {
 }
 
 fn internal_parse(input: &str) -> Result<(BNode, usize), String> {
+    if input.len() < 2 {
+        return Err(format!("Input's length should >= 2, {}", input));
+    }
     let desc = input.chars().next().unwrap();
     match desc {
         'l' => parse_list(input),
@@ -119,12 +122,12 @@ fn parse_int(input: &str) -> Result<(BNode, usize), String> {
                 return Ok((BNode::Int(val * mul), next + 1));
             }
             '0'..='9' => val = val * 10 + (c.to_digit(10).unwrap()) as i64,
-            _ => return Err(format!("Invalid number, starting point: {}", input)),
+            _ => return Err(format!("Invalid number, {}", input)),
         }
         next = next + 1;
     }
 
-    Err(format!("Missing ending 'e', starting point: {}", input))
+    Err(format!("Missing ending 'e', {}", input))
 }
 
 fn parse_string(input: &str) -> Result<(BNode, usize), String> {
@@ -135,7 +138,7 @@ fn parse_string(input: &str) -> Result<(BNode, usize), String> {
             ':' => {
                 return if next + len > input.len() {
                     Err(format!(
-                        "String's length is shorter than expected, starting point: {}",
+                        "String's length is shorter than expected, {}",
                         input
                     ))
                 } else {
@@ -145,15 +148,12 @@ fn parse_string(input: &str) -> Result<(BNode, usize), String> {
                 }
             }
             '0'..='9' => len = len * 10 + c.to_digit(10).unwrap() as usize,
-            _ => return Err(format!("Bad string is given, starting point: {}", input)),
+            _ => return Err(format!("Bad string is given, {}", input)),
         }
         next = next + 1;
     }
 
-    Err(format!(
-        "Missing ':' in the string, starting point: {}",
-        input
-    ))
+    Err(format!("Missing ':' in the string, {}", input))
 }
 
 fn parse_list(input: &str) -> Result<(BNode, usize), String> {
@@ -168,34 +168,34 @@ fn parse_list(input: &str) -> Result<(BNode, usize), String> {
         nodes.push(node);
     }
 
-    Err(format!(
-        "Missing 'e' at the end of list, starting point: {}",
-        input
-    ))
+    Err(format!("Missing 'e' at the end of list, {}", input))
 }
 
 fn parse_map(input: &str) -> Result<(BNode, usize), String> {
     let mut map = BMap::new();
     let mut next = 1;
-    loop {
+    while next < input.len() {
+        if "e" == &input[next..next + 1] {
+            return Ok((BNode::Map(map), next + 1));
+        }
         let (key_node, n) = internal_parse(&input[next..])?;
-        next = next + n;
         let key = match key_node {
             BNode::Str(s) => s,
-            _ => return Err("Dictionary key's type should be String".to_string()),
+            _ => {
+                return Err(format!(
+                    "Dictionary key's type should be String, {}",
+                    &input[next..]
+                ))
+            }
         };
+        next = next + n;
 
         let (val_node, n) = internal_parse(&input[next..])?;
         next = next + n;
         map.insert(key, val_node);
-
-        if "e" == &input[next..next + 1] {
-            next = next + 1;
-            break;
-        }
     }
 
-    Ok((BNode::Map(map), next))
+    Err(format!("Missing 'e' at the end of map, {}", input))
 }
 
 #[cfg(test)]
@@ -309,32 +309,42 @@ mod tests {
 
     #[test]
     fn test_map() {
-        let input =
-            "d8:announce41:http://bttracker.debian.org:6969/announce13:creation datei15739038104ee";
-        let len = input.len();
-        let result = crate::internal_parse(&input);
-
-        match result {
-            Ok((node, next)) => {
-                assert_eq!(len, next);
-                assert_eq!(&format!("{}", node), &input);
+        let cases = vec![
+            "d8:announce41:http://bttracker.debian.org:6969/announce13:creation datei15739038104ee",
+        ];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(node) => {
+                    assert_eq!(x, &format!("{}", node));
+                }
+                Err(e) => panic!(e),
             }
-            Err(e) => panic!(e),
+        }
+    }
+
+    #[test]
+    fn test_map_failed() {
+        let cases = vec!["d4:haloi23e", "di23e4:haloe"];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(_) => panic!("Should fail"),
+                Err(_) => (),
+            }
         }
     }
 
     #[test]
     fn test_nested_map() {
-        let input = r#"d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:"Debian CD from cdimage.debian.org"13:creation datei1573903810e9:httpseedsl145:https://cdimage.debian.org/cdimage/release/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.iso145:https://cdimage.debian.org/cdimage/archive/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.isoe4:infod6:lengthi351272960e4:name31:debian-10.2.0-amd64-netinst.iso12:piece lengthi262144eee"#;
-        let len = input.len();
-        let result = crate::internal_parse(&input);
-
-        match result {
-            Ok((node, next)) => {
-                assert_eq!(len, next);
-                assert_eq!(&format!("{}", node), &input);
+        let cases = vec![
+            r#"d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:"Debian CD from cdimage.debian.org"13:creation datei1573903810e9:httpseedsl145:https://cdimage.debian.org/cdimage/release/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.iso145:https://cdimage.debian.org/cdimage/archive/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.isoe4:infod6:lengthi351272960e4:name31:debian-10.2.0-amd64-netinst.iso12:piece lengthi262144eee"#,
+        ];
+        for x in &cases {
+            match crate::parse(x) {
+                Ok(node) => {
+                    assert_eq!(x, &format!("{}", node));
+                }
+                Err(e) => panic!(e),
             }
-            Err(e) => panic!(e),
         }
     }
 }
