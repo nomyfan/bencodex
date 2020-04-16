@@ -3,9 +3,18 @@ use std::fmt::Display;
 pub type BList = Vec<BNode>;
 pub type BMap = std::collections::BTreeMap<String, BNode>;
 
+const L: u8 = 'l' as u8;
+const D: u8 = 'd' as u8;
+const ZERO: u8 = '0' as u8;
+const NINE: u8 = '9' as u8;
+const I: u8 = 'i' as u8;
+const DASH: u8 = '-' as u8;
+const E: u8 = 'e' as u8;
+const COLON: u8 = ':' as u8;
+
 pub enum BNode {
     Int(i64),
-    Str(String),
+    Str(Vec<u8>),
     List(BList),
     Map(BMap),
 }
@@ -18,9 +27,16 @@ impl BNode {
         None
     }
 
-    pub fn as_str(&self) -> Option<&str> {
+    pub fn as_raw_str(&self) -> Option<&[u8]> {
         if let BNode::Str(s) = self {
             return Some(s);
+        }
+        None
+    }
+
+    pub fn as_string(&self) -> Option<String> {
+        if let BNode::Str(s) = self {
+            return Some(raw_str_to_string(s));
         }
         None
     }
@@ -44,7 +60,7 @@ impl Display for BNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
             BNode::Int(i) => write!(f, "i{}e", i),
-            BNode::Str(s) => write!(f, "{}:{}", &s.len(), &s),
+            BNode::Str(s) => write!(f, "{}:{}", &s.len(), &raw_str_to_string(s)),
             BNode::List(l) => {
                 write!(f, "l")?;
                 for n in l {
@@ -66,140 +82,213 @@ impl Display for BNode {
     }
 }
 
-/// Parse bencoded string
-///
-/// # Examples
-/// ```
-/// let b = "d3:inti233e3:lstl7:bencodeee";
-/// let result = bencodex::parse(&b);
-/// match result {
-///     Ok(node) => {
-///         let map = node.as_map().unwrap();
-///         let int = map.get("int").unwrap().as_int().unwrap();
-///         println!("Int = {}", int);
-///         let lst = map.get("lst").unwrap().as_list().unwrap();
-///         println!("There're {} values in the list", lst.len());
-///         println!(
-///             "The first value in the list is `{}`",
-///             &lst[0].as_str().unwrap()
-///         );
-///     }
-///     Err(e) => panic!(e),
-/// }
-/// ```
-pub fn parse(input: &str) -> Result<BNode, String> {
-    let (node, len) = internal_parse(input)?;
-    if len != input.len() {
-        return Err("Invalid input".to_string());
+fn raw_str_to_string(slice: &[u8]) -> String {
+    let mut s = String::new();
+    for x in slice {
+        s.push(*x as char);
     }
-    Ok(node)
+    s
 }
 
-fn internal_parse(input: &str) -> Result<(BNode, usize), String> {
-    if input.len() < 2 {
-        return Err(format!("Input's length should >= 2, {}", input));
-    }
-    let desc = input.chars().next().unwrap();
-    match desc {
-        'l' => parse_list(input),
-        'd' => parse_map(input),
-        '0'..='9' => parse_string(input),
-        'i' => parse_int(input),
-        _ => Err(format!("Undefined delimiter: {}", desc)),
-    }
-}
-
-fn parse_int(input: &str) -> Result<(BNode, usize), String> {
-    let mut val: i64 = 0;
-    let mut mul = 1;
-    let mut next: usize = 1;
-    for c in input.chars().skip(1) {
-        match c {
-            '-' if next == 1 => {
-                mul = -1;
-            }
-            'e' if next != 1 => {
-                return Ok((BNode::Int(val * mul), next + 1));
-            }
-            '0'..='9' => val = val * 10 + (c.to_digit(10).unwrap()) as i64,
-            _ => return Err(format!("Invalid number, {}", input)),
+pub fn parse<T>(stream: &mut T) -> Result<BNode, String>
+where
+    T: Iterator<Item = u8>,
+{
+    if let Some(delimiter) = stream.next() {
+        let (node, _) = internal_parse(stream, delimiter, 0)?;
+        if let Some(_) = stream.next() {
+            return Err("Invalid stream".to_string());
         }
-        next = next + 1;
+        return Ok(node);
     }
-
-    Err(format!("Missing ending 'e', {}", input))
+    Err("Invalid stream".to_string())
 }
 
-fn parse_string(input: &str) -> Result<(BNode, usize), String> {
-    let mut len: usize = 0;
-    let mut next: usize = 1;
-    for c in input.chars() {
-        match c {
-            ':' => {
-                return if next + len > input.len() {
-                    Err(format!(
-                        "String's length is shorter than expected, {}",
-                        input
-                    ))
-                } else {
-                    let mut ret = String::new();
-                    ret.push_str(&input[next..(next + len)]);
-                    Ok((BNode::Str(ret), next + len))
+fn internal_parse<T>(
+    stream: &mut T,
+    delimiter: u8,
+    position: usize,
+) -> Result<(BNode, usize), String>
+where
+    T: Iterator<Item = u8>,
+{
+    match delimiter {
+        L => parse_list(stream, position),
+        D => parse_map(stream, position),
+        ZERO..=NINE => parse_string(stream, (delimiter - ZERO) as usize, position),
+        I => parse_int(stream, position),
+        _ => Err(format!(
+            "Undefined delimiter: {}, position: #{}",
+            delimiter, position
+        )),
+    }
+}
+
+fn parse_int<T>(stream: &mut T, position: usize) -> Result<(BNode, usize), String>
+where
+    T: Iterator<Item = u8>,
+{
+    let mut val = 0i64;
+    let mut mul = 1;
+    let mut next = 1usize;
+    let mut cur_position = position;
+    loop {
+        match stream.next() {
+            Some(c) => {
+                cur_position += 1;
+                match c {
+                    DASH if next == 1 => {
+                        mul = -1;
+                    }
+                    E if next != 1 => {
+                        return Ok((BNode::Int(val * mul), cur_position));
+                    }
+                    ZERO..=NINE => val = val * 10 + (c - ZERO) as i64,
+                    _ => {
+                        return Err(format!(
+                            "A number contains non-digit, position: #{}",
+                            cur_position
+                        ))
+                    }
+                }
+                next = next + 1;
+            }
+            None => break,
+        }
+    }
+
+    Err(format!(
+        "Missing ending 'e' for a number, position: #{}",
+        cur_position
+    ))
+}
+
+fn parse_string<T>(stream: &mut T, init: usize, position: usize) -> Result<(BNode, usize), String>
+where
+    T: Iterator<Item = u8>,
+{
+    let mut len: usize = init;
+    let mut matched = false;
+    let mut raw_str: Vec<u8> = Vec::new();
+    let mut cur_position = position;
+    loop {
+        match stream.next() {
+            Some(c) => {
+                cur_position += 1;
+                if matched {
+                    if len > 0 {
+                        raw_str.push(c);
+                        len = len - 1;
+                    }
+                    if len == 0 {
+                        return Ok((BNode::Str(raw_str), cur_position));
+                    }
+                    continue;
+                }
+                match c {
+                    COLON => matched = true,
+                    ZERO..=NINE => len = len * 10 + (c - ZERO) as usize,
+                    _ => {
+                        return Err(format!(
+                            "String's length contains non-digit, position: #{}",
+                            cur_position
+                        ))
+                    }
                 }
             }
-            '0'..='9' => len = len * 10 + c.to_digit(10).unwrap() as usize,
-            _ => return Err(format!("Bad string is given, {}", input)),
+            None => break,
         }
-        next = next + 1;
     }
 
-    Err(format!("Missing ':' in the string, {}", input))
+    Err("String's length is shorter than expected".to_string())
 }
 
-fn parse_list(input: &str) -> Result<(BNode, usize), String> {
+fn parse_list<T>(stream: &mut T, position: usize) -> Result<(BNode, usize), String>
+where
+    T: Iterator<Item = u8>,
+{
     let mut nodes = vec![];
-    let mut next = 1;
-    while next < input.len() {
-        if "e" == &input[next..next + 1] {
-            return Ok((BNode::List(nodes), next + 1));
+    let mut cur_position = position;
+    loop {
+        match stream.next() {
+            Some(c) => {
+                cur_position += 1;
+                if E == c {
+                    return Ok((BNode::List(nodes), cur_position));
+                }
+                let (node, up_pos) = internal_parse(stream, c, cur_position)?;
+                cur_position = up_pos;
+
+                nodes.push(node);
+            }
+            None => break,
         }
-        let (node, n) = internal_parse(&input[next..])?;
-        next = next + n;
-        nodes.push(node);
     }
 
-    Err(format!("Missing 'e' at the end of list, {}", input))
+    Err(format!("Missing 'e' at the end of list"))
 }
 
-fn parse_map(input: &str) -> Result<(BNode, usize), String> {
+fn parse_map<T>(stream: &mut T, position: usize) -> Result<(BNode, usize), String>
+where
+    T: Iterator<Item = u8>,
+{
     let mut map = BMap::new();
-    let mut next = 1;
-    while next < input.len() {
-        if "e" == &input[next..next + 1] {
-            return Ok((BNode::Map(map), next + 1));
-        }
-        let (key_node, n) = internal_parse(&input[next..])?;
-        let key = match key_node {
-            BNode::Str(s) => s,
-            _ => {
-                return Err(format!(
-                    "Dictionary key's type should be String, {}",
-                    &input[next..]
-                ))
-            }
-        };
-        next = next + n;
+    let mut key_turn = true;
+    let mut key = vec![];
+    let mut cur_position = position;
+    loop {
+        match stream.next() {
+            Some(c) => {
+                cur_position += 1;
+                if E == c {
+                    return Ok((BNode::Map(map), cur_position));
+                }
+                if key_turn {
+                    let (key_node, up_pos) = internal_parse(stream, c, cur_position)?;
+                    let raw_key = match key_node {
+                        BNode::Str(s) => s,
+                        _ => {
+                            return Err(format!(
+                                "Dictionary key's type should be String, position: #{}",
+                                cur_position
+                            ))
+                        }
+                    };
+                    cur_position = up_pos;
 
-        let (val_node, n) = internal_parse(&input[next..])?;
-        next = next + n;
-        map.insert(key, val_node);
+                    key.push(raw_str_to_string(&raw_key));
+                } else {
+                    let (val_node, up_pos) = internal_parse(stream, c, cur_position)?;
+                    cur_position = up_pos;
+
+                    map.insert(key.pop().unwrap(), val_node);
+                }
+                key_turn = !key_turn;
+            }
+            None => break,
+        }
     }
 
-    Err(format!("Missing 'e' at the end of map, {}", input))
+    if !key_turn {
+        return Err("A dictionary key lacks a corresponding value".to_string());
+    }
+
+    Err(format!(
+        "Missing 'e' at the end of map, position: {}",
+        cur_position
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    fn str_to_raw(s: &str) -> Vec<u8> {
+        let mut v = vec![];
+        for x in s.bytes() {
+            v.push(x as u8);
+        }
+
+        v
+    }
 
     #[test]
     fn test_bint_display() {
@@ -212,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_string_display() {
-        let bstr = crate::BNode::Str("str".to_string());
+        let bstr = crate::BNode::Str(str_to_raw("str"));
         assert_eq!(&format!("{}", bstr), "3:str");
     }
 
@@ -220,7 +309,7 @@ mod tests {
     fn test_primitive_int() {
         let cases = vec!["i2147483648e", "i-253e"];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(bint) => {
                     if let crate::BNode::Int(i) = bint {
                         assert_eq!(i, x[1..x.len() - 1].parse::<i64>().unwrap());
@@ -235,7 +324,7 @@ mod tests {
     fn test_primitive_int_failed() {
         let cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(_) => panic!("Should fail"),
                 Err(_) => (),
             }
@@ -247,11 +336,11 @@ mod tests {
         use crate::BNode;
         let cases = vec!["4:halo"];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(node) => {
                     if let BNode::Str(v) = node {
                         let index = x.find(':').unwrap();
-                        assert_eq!(&x[index + 1..], &v[..]);
+                        assert_eq!(&x[index + 1..], &crate::raw_str_to_string(&v));
                     }
                 }
                 Err(e) => panic!(e),
@@ -263,7 +352,7 @@ mod tests {
     fn test_primitive_string_failed() {
         let cases = vec!["5:hello2", "5:halo", "521"];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(_) => panic!("Should fail"),
                 Err(_) => (),
             }
@@ -274,7 +363,7 @@ mod tests {
     fn test_list() {
         let cases = vec!["l4:spami42ee", "le"];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(node) => assert_eq!(x, &format!("{}", node)),
                 Err(e) => panic!(e),
             }
@@ -285,7 +374,7 @@ mod tests {
     fn test_list_failed() {
         let cases = vec!["l4:halo"];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(_) => panic!("Should fail"),
                 Err(_) => (),
             }
@@ -294,16 +383,16 @@ mod tests {
 
     #[test]
     fn test_nested_list() {
-        let input = "ll5:helloe4:spami42ee";
-        let len = input.len();
-        let result = crate::parse_list(&input);
+        let cases = vec!["ll5:helloe4:spami42ee"];
 
-        match result {
-            Ok((node, next)) => {
-                assert_eq!(len, next);
-                assert_eq!(&format!("{}", node), &input);
+        for x in cases {
+            match crate::parse(&mut x.bytes()) {
+                Ok(node) => {
+                    println!("{}-{}", &x, node);
+                    assert_eq!(&format!("{}", node), &x);
+                }
+                Err(e) => panic!(e),
             }
-            Err(e) => panic!(e),
         }
     }
 
@@ -313,7 +402,7 @@ mod tests {
             "d8:announce41:http://bttracker.debian.org:6969/announce13:creation datei15739038104ee",
         ];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(node) => {
                     assert_eq!(x, &format!("{}", node));
                 }
@@ -326,7 +415,7 @@ mod tests {
     fn test_map_failed() {
         let cases = vec!["d4:haloi23e", "di23e4:haloe"];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(_) => panic!("Should fail"),
                 Err(_) => (),
             }
@@ -339,7 +428,7 @@ mod tests {
             r#"d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:"Debian CD from cdimage.debian.org"13:creation datei1573903810e9:httpseedsl145:https://cdimage.debian.org/cdimage/release/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.iso145:https://cdimage.debian.org/cdimage/archive/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.isoe4:infod6:lengthi351272960e4:name31:debian-10.2.0-amd64-netinst.iso12:piece lengthi262144eee"#,
         ];
         for x in &cases {
-            match crate::parse(x) {
+            match crate::parse(&mut x.bytes()) {
                 Ok(node) => {
                     assert_eq!(x, &format!("{}", node));
                 }
