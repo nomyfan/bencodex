@@ -1,4 +1,4 @@
-# bencode
+# bencodex
 
 A bencode parser.
 
