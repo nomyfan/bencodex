@@ -269,7 +269,14 @@ where
         }
     }
 
-    Err(format!("Missing 'e' at the end of map"))
+    if !key_turn {
+        return Err("A dictionary key lacks a corresponding value".to_string());
+    }
+
+    Err(format!(
+        "Missing 'e' at the end of map, position: {}",
+        cur_position
+    ))
 }
 
 #[cfg(test)]
