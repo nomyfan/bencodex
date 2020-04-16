@@ -4,7 +4,7 @@ A bencode parser.
 
 ## Example
 
-## Plain text
+### Plain text
 ```rust
 use bencodex::BNode;
 
