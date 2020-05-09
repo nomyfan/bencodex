@@ -74,20 +74,23 @@ impl Iterator for Adapter {
 ```
 Unmarshal
 ```rust
-fn unmarshal_from_bitorrent_file() -> io::Result<()> {
-    let f = File::open("Ps.torrent")?;
-    let reader = BufReader::new(f);
+fn unmarshal_from_bitorrent_file() -> Option<BNode> {
+    if let Ok(f) = File::open("Ps.torrent") {
+        let reader = BufReader::new(f);
 
-    let mut adapter = Adapter {
-        bytes: reader.bytes(),
-    };
-    if let Ok(BNode::Map(map)) = bencodex::parse(&mut adapter) {
-        for k in map.keys() {
-            println!("{}", k);
+        let mut adapter = Adapter {
+            bytes: reader.bytes(),
+        };
+        let root = bencodex::parse(&mut adapter);
+        if let Ok(BNode::Map(map)) = &root {
+            for k in map.keys() {
+                println!("{}", k);
+            }
+            return Some(root.unwrap());
         }
+        return None;
     }
-
-    Ok(())
+    None
 }
 ```
 Output
