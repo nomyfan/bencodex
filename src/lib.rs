@@ -169,7 +169,7 @@ where
 {
     let mut len: usize = init;
     let mut matched = false;
-    let mut raw_str: Vec<u8> = Vec::new();
+    let mut raw_str: Vec<u8> = vec![];
     let mut cur_position = position;
     loop {
         match stream.next() {
@@ -186,7 +186,10 @@ where
                     continue;
                 }
                 match c {
-                    COLON => matched = true,
+                    COLON => {
+                        matched = true;
+                        raw_str = Vec::with_capacity(len);
+                    }
                     ZERO..=NINE => len = len * 10 + (c - ZERO) as usize,
                     _ => {
                         return Err(format!(
