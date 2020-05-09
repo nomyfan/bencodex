@@ -99,3 +99,14 @@ creation date
 encoding
 info
 ```
+
+Marshal
+```rust
+let res = unmarshal_from_bitorrent_file();
+if let Some(bn) = res {
+    let mut buf: Vec<u8> = Vec::new();
+    bn.marshal(&mut buf);
+    let mut file = File::create("./out.torrent")?;
+    file.write_all(&buf)?;
+}
+``` 

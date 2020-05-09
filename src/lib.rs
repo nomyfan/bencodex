@@ -20,6 +20,38 @@ pub enum BNode {
 }
 
 impl BNode {
+    pub fn marshal(&self, buf: &mut Vec<u8>) {
+        match self {
+            BNode::Int(i) => {
+                buf.push('i' as u8);
+                push_all(i.to_string().as_bytes(), buf);
+                buf.push('e' as u8);
+            }
+            BNode::Str(s) => {
+                push_all(s.len().to_string().as_bytes(), buf);
+                buf.push(':' as u8);
+                push_all(s, buf);
+            }
+            BNode::List(l) => {
+                buf.push('l' as u8);
+                for bn in l {
+                    bn.marshal(buf);
+                }
+                buf.push('e' as u8);
+            }
+            BNode::Map(m) => {
+                buf.push('d' as u8);
+                for (k, v) in m {
+                    push_all(k.len().to_string().as_bytes(), buf);
+                    buf.push(':' as u8);
+                    push_all(k.as_bytes(), buf);
+                    v.marshal(buf);
+                }
+                buf.push('e' as u8);
+            }
+        }
+    }
+
     pub fn as_int(&self) -> Option<i64> {
         if let BNode::Int(int) = self {
             return Some(*int);
@@ -88,6 +120,13 @@ fn raw_str_to_string(slice: &[u8]) -> String {
         s.push(*x as char);
     }
     s
+}
+
+#[inline]
+fn push_all(bytes: &[u8], buf: &mut Vec<u8>) {
+    for x in bytes {
+        buf.push(*x);
+    }
 }
 
 pub fn parse<T>(stream: &mut T) -> Result<BNode, String>
