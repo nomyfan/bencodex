@@ -3,15 +3,6 @@ use std::fmt::Display;
 pub type BList = Vec<BNode>;
 pub type BMap = std::collections::BTreeMap<String, BNode>;
 
-const L: u8 = 'l' as u8;
-const D: u8 = 'd' as u8;
-const ZERO: u8 = '0' as u8;
-const NINE: u8 = '9' as u8;
-const I: u8 = 'i' as u8;
-const DASH: u8 = '-' as u8;
-const E: u8 = 'e' as u8;
-const COLON: u8 = ':' as u8;
-
 pub enum BNode {
     Int(i64),
     Str(Vec<u8>),
@@ -23,31 +14,31 @@ impl BNode {
     pub fn marshal(&self, buf: &mut Vec<u8>) {
         match self {
             BNode::Int(i) => {
-                buf.push('i' as u8);
+                buf.push(b'i');
                 push_all(i.to_string().as_bytes(), buf);
-                buf.push('e' as u8);
+                buf.push(b'e');
             }
             BNode::Str(s) => {
                 push_all(s.len().to_string().as_bytes(), buf);
-                buf.push(':' as u8);
+                buf.push(b':');
                 push_all(s, buf);
             }
             BNode::List(l) => {
-                buf.push('l' as u8);
+                buf.push(b'l');
                 for bn in l {
                     bn.marshal(buf);
                 }
-                buf.push('e' as u8);
+                buf.push(b'e');
             }
             BNode::Map(m) => {
-                buf.push('d' as u8);
+                buf.push(b'd');
                 for (k, v) in m {
                     push_all(k.len().to_string().as_bytes(), buf);
-                    buf.push(':' as u8);
+                    buf.push(b':');
                     push_all(k.as_bytes(), buf);
                     v.marshal(buf);
                 }
-                buf.push('e' as u8);
+                buf.push(b'e');
             }
         }
     }
@@ -152,10 +143,10 @@ where
     T: Iterator<Item = u8>,
 {
     match delimiter {
-        L => parse_list(stream, position),
-        D => parse_map(stream, position),
-        ZERO..=NINE => parse_string(stream, (delimiter - ZERO) as usize, position),
-        I => parse_int(stream, position),
+        b'l' => parse_list(stream, position),
+        b'd' => parse_map(stream, position),
+        b'0'..=b'9' => parse_string(stream, (delimiter - b'0') as usize, position),
+        b'i' => parse_int(stream, position),
         _ => Err(format!(
             "Undefined delimiter: {}, position: #{}",
             delimiter, position
@@ -176,13 +167,13 @@ where
             Some(c) => {
                 cur_position += 1;
                 match c {
-                    DASH if next == 1 => {
+                    b'-' if next == 1 => {
                         mul = -1;
                     }
-                    E if next != 1 => {
+                    b'e' if next != 1 => {
                         return Ok((BNode::Int(val * mul), cur_position));
                     }
-                    ZERO..=NINE => val = val * 10 + (c - ZERO) as i64,
+                    b'0'..=b'9' => val = val * 10 + (c - b'0') as i64,
                     _ => {
                         return Err(format!(
                             "A number contains non-digit, position: #{}",
@@ -225,11 +216,11 @@ where
                     continue;
                 }
                 match c {
-                    COLON => {
+                    b':' => {
                         matched = true;
                         raw_str = Vec::with_capacity(len);
                     }
-                    ZERO..=NINE => len = len * 10 + (c - ZERO) as usize,
+                    b'0'..=b'9' => len = len * 10 + (c - b'0') as usize,
                     _ => {
                         return Err(format!(
                             "String's length contains non-digit, position: #{}",
@@ -255,7 +246,7 @@ where
         match stream.next() {
             Some(c) => {
                 cur_position += 1;
-                if E == c {
+                if b'e' == c {
                     return Ok((BNode::List(nodes), cur_position));
                 }
                 let (node, up_pos) = internal_parse(stream, c, cur_position)?;
@@ -282,7 +273,7 @@ where
         match stream.next() {
             Some(c) => {
                 cur_position += 1;
-                if E == c {
+                if b'e' == c {
                     return Ok((BNode::Map(map), cur_position));
                 }
                 if key_turn {
@@ -326,7 +317,7 @@ mod tests {
     fn str_to_raw(s: &str) -> Vec<u8> {
         let mut v = vec![];
         for x in s.bytes() {
-            v.push(x as u8);
+            v.push(x);
         }
 
         v
