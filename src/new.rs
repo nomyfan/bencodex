@@ -2,7 +2,7 @@ pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
 
 pub enum BNode {
-    Int(i64),
+    Number(i64),
     Stream(Vec<u8>),
     List(BList),
     Dict(BDict),
@@ -11,7 +11,7 @@ pub enum BNode {
 impl BNode {
     pub fn marshal(&self, buf: &mut Vec<u8>) {
         match self {
-            BNode::Int(i) => {
+            BNode::Number(i) => {
                 buf.push(b'i');
                 push_all(i.to_string().as_bytes(), buf);
                 buf.push(b'e');
@@ -54,14 +54,14 @@ https://en.wikipedia.org/wiki/Bencode
 */
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Token {
-    IntStart,
-    IntEnd,
+    NumberStart,
+    NumberEnd,
     ListStart,
     ListEnd,
     DictStart,
     DictEnd,
-    StreamLength(i64),
-    StreamColon,
+    Length(i64),
+    Colon,
     EOF,
 }
 
@@ -165,10 +165,10 @@ where
         match self.next_byte() {
             Some(unknown) => match unknown {
                 b'i' => {
-                    self.current_token = Some(Token::IntStart);
-                    self.token_stack.push(Token::IntStart);
+                    self.current_token = Some(Token::NumberStart);
+                    self.token_stack.push(Token::NumberStart);
 
-                    Token::IntStart
+                    Token::NumberStart
                 }
                 b'l' => {
                     self.current_token = Some(Token::ListStart);
@@ -183,10 +183,10 @@ where
                     Token::DictStart
                 }
                 b'e' => match &self.token_stack.pop() {
-                    Some(Token::IntStart) => {
+                    Some(Token::NumberStart) => {
                         self.current_token = None;
 
-                        Token::IntEnd
+                        Token::NumberEnd
                     }
                     Some(Token::ListStart) => {
                         self.current_token = None;
@@ -207,15 +207,15 @@ where
                     // Get the stream length until it meets the colon
                     // TODO handle overflow?
                     let length = self.read_i64_before((unknown - b'0') as i64, b':');
-                    self.current_token = Some(Token::StreamLength(length));
+                    self.current_token = Some(Token::Length(length));
 
-                    Token::StreamLength(length)
+                    Token::Length(length)
                 }
                 b':' => match &self.current_token {
-                    Some(Token::StreamLength(_)) => {
-                        self.current_token = Some(Token::StreamColon);
+                    Some(Token::Length(_)) => {
+                        self.current_token = Some(Token::Colon);
 
-                        Token::StreamColon
+                        Token::Colon
                     }
                     _ => panic!(
                         "MSG: `:` should be after the length of stream.\nPOSITION: {}",
@@ -257,12 +257,12 @@ where
     T: Iterator<Item = u8>,
 {
     match lexer.look_ahead() {
-        Token::IntStart => {
-            let (ivalue, _lexer) = parse_int(lexer);
+        Token::NumberStart => {
+            let (number, _lexer) = parse_int(lexer);
 
-            (BNode::Int(ivalue), _lexer)
+            (BNode::Number(number), _lexer)
         }
-        Token::StreamLength(_) => {
+        Token::Length(_) => {
             let (stream, _lexer) = parse_stream(lexer);
 
             (BNode::Stream(stream), _lexer)
@@ -285,11 +285,11 @@ fn parse_int<'a, T>(mut lexer: Lexer<'a, T>) -> (i64, Lexer<'a, T>)
 where
     T: Iterator<Item = u8>,
 {
-    assert_eq!(Token::IntStart, lexer.next_token());
+    assert_eq!(Token::NumberStart, lexer.next_token());
 
     let value = lexer.read_i64_before(0, b'e');
 
-    assert_eq!(Token::IntEnd, lexer.next_token());
+    assert_eq!(Token::NumberEnd, lexer.next_token());
 
     (value, lexer)
 }
@@ -300,8 +300,8 @@ where
 {
     let next_token = lexer.next_token();
     match next_token {
-        Token::StreamLength(len) => {
-            assert_eq!(Token::StreamColon, lexer.next_token());
+        Token::Length(len) => {
+            assert_eq!(Token::Colon, lexer.next_token());
             let stream = lexer.read_nbytes(len as usize);
 
             (stream, lexer)
@@ -319,27 +319,27 @@ where
 
     loop {
         match lexer.look_ahead() {
-            Token::IntStart => {
-                let (ivalue, _lexer) = parse_int(lexer);
-                list.push(BNode::Int(ivalue));
+            Token::NumberStart => {
+                let (number, _lexer) = parse_int(lexer);
+                list.push(BNode::Number(number));
 
                 lexer = _lexer;
             }
-            Token::StreamLength(_) => {
-                let (istream, _lexer) = parse_stream(lexer);
-                list.push(BNode::Stream(istream));
+            Token::Length(_) => {
+                let (stream, _lexer) = parse_stream(lexer);
+                list.push(BNode::Stream(stream));
 
                 lexer = _lexer;
             }
             Token::ListStart => {
-                let (ilist, _lexer) = parse_list(lexer);
-                list.push(BNode::List(ilist));
+                let (_list, _lexer) = parse_list(lexer);
+                list.push(BNode::List(_list));
 
                 lexer = _lexer;
             }
             Token::DictStart => {
-                let (idict, _lexer) = parse_dict(lexer);
-                list.push(BNode::Dict(idict));
+                let (dict, _lexer) = parse_dict(lexer);
+                list.push(BNode::Dict(dict));
 
                 lexer = _lexer;
             }
@@ -363,7 +363,7 @@ where
     let mut dict = BDict::new();
     loop {
         match lexer.look_ahead() {
-            Token::StreamLength(_) => {
+            Token::Length(_) => {
                 let (raw_key, _lexer) = parse_stream(lexer);
                 let key = String::from_utf8(raw_key).unwrap();
                 let (value, _lexer) = parse_internal(_lexer);
@@ -420,8 +420,8 @@ mod tests {
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        assert_eq!(Token::IntStart, lexer.look_ahead());
-        assert_eq!(Token::IntStart, lexer.look_ahead());
+        assert_eq!(Token::NumberStart, lexer.look_ahead());
+        assert_eq!(Token::NumberStart, lexer.look_ahead());
     }
 
     #[test]
@@ -494,7 +494,7 @@ mod tests {
         }
 
         match dict.get("foo").unwrap() {
-            BNode::Int(iv) => {
+            BNode::Number(iv) => {
                 assert_eq!(&42, iv);
             }
             _ => panic!("`foo` should have the value `42`"),
