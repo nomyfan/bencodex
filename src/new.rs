@@ -277,7 +277,7 @@ where
 
             (BNode::Dict(dict), _lexer)
         }
-        _ => panic!("invalid input"),
+        _ => panic!("MSG:invalid input\nPOSITION: {}", lexer.position),
     }
 }
 
