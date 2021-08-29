@@ -119,7 +119,10 @@ where
                 b'0'..=b'9' => num = num * 10 + (x - b'0') as i64,
                 b'-' => match sign {
                     -1 if read != 1 => {
-                        panic!("minus can only appear in the front of the number")
+                        panic!(
+                            "MSG: `-` can only appear in the head of the number.\nPOSITION: {}",
+                            self.position
+                        );
                     }
                     _ => sign = -1,
                 },
@@ -127,13 +130,13 @@ where
                     self.cached_byte = Some(symbol);
                     return sign * num;
                 }
-                _ => panic!("invalid number"),
+                _ => panic!("MSG: invalid number.\nPOSITION: {}", self.position),
             }
 
             meet = self.next_byte();
         }
 
-        panic!("invalid number");
+        panic!("MSG: invalid number.\nPOSITION: {}", self.position);
     }
 
     fn read_nbytes(&mut self, len: usize) -> Vec<u8> {
@@ -142,7 +145,12 @@ where
         for _ in 0..len {
             match self.next_byte() {
                 Some(byte) => ret.push(byte),
-                None => panic!("Stream is expected to be longer"),
+                None => panic!(
+                    "MSG: stream's length is expected to be {}, but it's {}.\nPOSITION: {}",
+                    len,
+                    ret.len(),
+                    self.position
+                ),
             }
         }
 
@@ -190,7 +198,10 @@ where
 
                         Token::DictEnd
                     }
-                    _ => panic!("`e` should be the end of integer, list and dictionary"),
+                    _ => panic!(
+                        "MSG: `e` should be the end of number, list and dictionary.\nPOSITION: {}",
+                        self.position
+                    ),
                 },
                 b'0'..=b'9' => {
                     // Get the stream length until it meets the colon
@@ -206,9 +217,15 @@ where
 
                         Token::StreamColon
                     }
-                    _ => panic!("Token::StreamColon should be after Token::StreamLength"),
+                    _ => panic!(
+                        "MSG: `:` should be after the length of stream.\nPOSITION: {}",
+                        self.position
+                    ),
                 },
-                _ => panic!("Invalid token: {}, position: {}", unknown, &self.position),
+                _ => panic!(
+                    "MSG: unknown token: {}\nPOSITION: {}",
+                    unknown, self.position
+                ),
             },
             None => Token::EOF,
         }
@@ -289,7 +306,7 @@ where
 
             (stream, lexer)
         }
-        _ => panic!("invalid input"),
+        _ => panic!("MSG: invalid input\nPOSITION: {}", lexer.position),
     }
 }
 
@@ -333,7 +350,7 @@ where
             Token::EOF => {
                 return (list, lexer);
             }
-            _ => panic!("invalid list"),
+            _ => panic!("MSG: invalid list\nPOSITION: {}", lexer.position),
         }
     }
 }
@@ -359,7 +376,7 @@ where
                 lexer.next_token();
                 return (dict, lexer);
             }
-            x => panic!("invalid dictionary, {:?}, position: {}", x, &lexer.position),
+            _ => panic!("MSG: invalid dictionary\nPOSITION: {}", lexer.position),
         }
     }
 }
