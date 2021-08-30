@@ -411,11 +411,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use core::panic;
-
-    use crate::new::{BNode, Token};
-
-    use super::{parse, parse_dict, parse_int, parse_list, parse_stream, Lexer};
+    use super::{parse, parse_dict, parse_int, parse_list, parse_stream, BNode, Lexer, Token};
 
     #[test]
     fn test_lexer_read_i64_before() {
