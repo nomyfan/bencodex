@@ -1,6 +1,26 @@
 pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
 
+#[derive(Debug)]
+pub struct Error {
+    pub position: i64,
+    pub msg: String,
+}
+
+impl Error {
+    fn new<T>(msg: T, position: i64) -> Error
+    where
+        T: Into<String>,
+    {
+        Error {
+            msg: msg.into(),
+            position,
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 pub enum BNode {
     Number(i64),
     Stream(Vec<u8>),
@@ -106,7 +126,7 @@ where
         next
     }
 
-    fn read_i64_before(&mut self, init: i64, symbol: u8) -> i64 {
+    fn read_i64_before(&mut self, init: i64, symbol: u8) -> Result<i64> {
         let mut num = init;
         let mut sign = 1i64;
         let mut read = 0;
@@ -119,47 +139,51 @@ where
                 b'0'..=b'9' => num = num * 10 + (x - b'0') as i64,
                 b'-' => match sign {
                     -1 if read != 1 => {
-                        panic!(
-                            "MSG: `-` can only appear in the head of the number.\nPOSITION: {}",
-                            self.position
-                        );
+                        return Err(Error::new(
+                            "`-` can only appear in the head of the number",
+                            self.position,
+                        ));
                     }
                     _ => sign = -1,
                 },
                 b if b == symbol => {
                     self.cached_byte = Some(symbol);
-                    return sign * num;
+                    return Ok(sign * num);
                 }
-                _ => panic!("MSG: invalid number.\nPOSITION: {}", self.position),
+                _ => return Err(Error::new("invalid number", self.position)),
             }
 
             meet = self.next_byte();
         }
 
-        panic!("MSG: invalid number.\nPOSITION: {}", self.position);
+        Err(Error::new("invalid number", self.position))
     }
 
-    fn read_nbytes(&mut self, len: usize) -> Vec<u8> {
+    fn read_nbytes(&mut self, len: usize) -> Result<Vec<u8>> {
         let mut ret = Vec::with_capacity(len);
 
         for _ in 0..len {
             match self.next_byte() {
                 Some(byte) => ret.push(byte),
-                None => panic!(
-                    "MSG: stream's length is expected to be {}, but it's {}.\nPOSITION: {}",
-                    len,
-                    ret.len(),
-                    self.position
-                ),
+                None => {
+                    return Err(Error::new(
+                        format!(
+                            "stream's length is expected to be {}, but it's {}.",
+                            len,
+                            ret.len()
+                        ),
+                        self.position,
+                    ));
+                }
             }
         }
 
-        ret
+        Ok(ret)
     }
 
-    fn next_token(&mut self) -> Token {
+    fn next_token(&mut self) -> Result<Token> {
         if let Some(token) = self.cached_token.take() {
-            return token;
+            return Ok(token);
         }
 
         match self.next_byte() {
@@ -168,215 +192,219 @@ where
                     self.current_token = Some(Token::NumberStart);
                     self.token_stack.push(Token::NumberStart);
 
-                    Token::NumberStart
+                    Ok(Token::NumberStart)
                 }
                 b'l' => {
                     self.current_token = Some(Token::ListStart);
                     self.token_stack.push(Token::ListStart);
 
-                    Token::ListStart
+                    Ok(Token::ListStart)
                 }
                 b'd' => {
                     self.current_token = Some(Token::DictStart);
                     self.token_stack.push(Token::DictStart);
 
-                    Token::DictStart
+                    Ok(Token::DictStart)
                 }
                 b'e' => match &self.token_stack.pop() {
                     Some(Token::NumberStart) => {
                         self.current_token = None;
 
-                        Token::NumberEnd
+                        Ok(Token::NumberEnd)
                     }
                     Some(Token::ListStart) => {
                         self.current_token = None;
 
-                        Token::ListEnd
+                        Ok(Token::ListEnd)
                     }
                     Some(Token::DictStart) => {
                         self.current_token = None;
 
-                        Token::DictEnd
+                        Ok(Token::DictEnd)
                     }
-                    _ => panic!(
-                        "MSG: `e` should be the end of number, list and dictionary.\nPOSITION: {}",
-                        self.position
-                    ),
+                    _ => {
+                        return Err(Error::new(
+                            "`e` should be the end of number, list and dictionary.",
+                            self.position,
+                        ));
+                    }
                 },
                 b'0'..=b'9' => {
                     // Get the stream length until it meets the colon
                     // TODO handle overflow?
-                    let length = self.read_i64_before((unknown - b'0') as i64, b':');
+                    let length = self.read_i64_before((unknown - b'0') as i64, b':')?;
                     self.current_token = Some(Token::Length(length));
 
-                    Token::Length(length)
+                    Ok(Token::Length(length))
                 }
                 b':' => match &self.current_token {
                     Some(Token::Length(_)) => {
                         self.current_token = Some(Token::Colon);
 
-                        Token::Colon
+                        Ok(Token::Colon)
                     }
-                    _ => panic!(
-                        "MSG: `:` should be after the length of stream.\nPOSITION: {}",
-                        self.position
-                    ),
+                    _ => Err(Error::new(
+                        "`:` should be after the length of stream.",
+                        self.position,
+                    )),
                 },
-                _ => panic!(
-                    "MSG: unknown token: {}\nPOSITION: {}",
-                    unknown, self.position
-                ),
+                _ => Err(Error::new(
+                    format!("unknown token: {}", unknown),
+                    self.position,
+                )),
             },
-            None => Token::EOF,
+            None => Ok(Token::EOF),
         }
     }
 
-    fn look_ahead(&mut self) -> Token {
+    fn look_ahead(&mut self) -> Result<Token> {
         if let Some(token) = &self.cached_token {
-            return token.clone();
+            return Ok(token.clone());
         }
 
-        let next_token = self.next_token();
+        let next_token = self.next_token()?;
         self.cached_token = Some(next_token);
 
-        next_token
+        Ok(next_token)
     }
 }
 
-pub fn parse<T>(stream: &mut T) -> BNode
+pub fn parse<T>(stream: &mut T) -> Result<BNode>
 where
     T: Iterator<Item = u8>,
 {
-    let (node, _) = parse_internal(Lexer::new(stream));
+    let (node, _) = parse_internal(Lexer::new(stream))?;
 
-    node
+    Ok(node)
 }
 
-fn parse_internal<'a, T>(mut lexer: Lexer<'a, T>) -> (BNode, Lexer<'a, T>)
+fn parse_internal<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(BNode, Lexer<'a, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    match lexer.look_ahead() {
+    match lexer.look_ahead()? {
         Token::NumberStart => {
-            let (number, _lexer) = parse_int(lexer);
+            let (number, _lexer) = parse_int(lexer)?;
 
-            (BNode::Number(number), _lexer)
+            Ok((BNode::Number(number), _lexer))
         }
         Token::Length(_) => {
-            let (stream, _lexer) = parse_stream(lexer);
+            let (stream, _lexer) = parse_stream(lexer)?;
 
-            (BNode::Stream(stream), _lexer)
+            Ok((BNode::Stream(stream), _lexer))
         }
         Token::ListStart => {
-            let (list, _lexer) = parse_list(lexer);
+            let (list, _lexer) = parse_list(lexer)?;
 
-            (BNode::List(list), _lexer)
+            Ok((BNode::List(list), _lexer))
         }
         Token::DictStart => {
-            let (dict, _lexer) = parse_dict(lexer);
+            let (dict, _lexer) = parse_dict(lexer)?;
 
-            (BNode::Dict(dict), _lexer)
+            Ok((BNode::Dict(dict), _lexer))
         }
-        _ => panic!("MSG:invalid input\nPOSITION: {}", lexer.position),
+        _ => Err(Error::new("invalid input", lexer.position)),
     }
 }
 
-fn parse_int<'a, T>(mut lexer: Lexer<'a, T>) -> (i64, Lexer<'a, T>)
+fn parse_int<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(i64, Lexer<'a, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    assert_eq!(Token::NumberStart, lexer.next_token());
+    assert_eq!(Token::NumberStart, lexer.next_token()?);
 
-    let value = lexer.read_i64_before(0, b'e');
+    let value = lexer.read_i64_before(0, b'e')?;
 
-    assert_eq!(Token::NumberEnd, lexer.next_token());
+    assert_eq!(Token::NumberEnd, lexer.next_token()?);
 
-    (value, lexer)
+    Ok((value, lexer))
 }
 
-fn parse_stream<'a, T>(mut lexer: Lexer<'a, T>) -> (Vec<u8>, Lexer<'a, T>)
+fn parse_stream<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(Vec<u8>, Lexer<'a, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    let next_token = lexer.next_token();
+    let next_token = lexer.next_token()?;
     match next_token {
         Token::Length(len) => {
-            assert_eq!(Token::Colon, lexer.next_token());
-            let stream = lexer.read_nbytes(len as usize);
+            assert_eq!(Token::Colon, lexer.next_token()?);
+            let stream = lexer.read_nbytes(len as usize)?;
 
-            (stream, lexer)
+            Ok((stream, lexer))
         }
-        _ => panic!("MSG: invalid input\nPOSITION: {}", lexer.position),
+        _ => Err(Error::new("invalid input", lexer.position)),
     }
 }
 
-fn parse_list<'a, T>(mut lexer: Lexer<'a, T>) -> (BList, Lexer<'a, T>)
+fn parse_list<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(BList, Lexer<'a, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    assert_eq!(Token::ListStart, lexer.next_token());
+    assert_eq!(Token::ListStart, lexer.next_token()?);
     let mut list = vec![];
 
     loop {
-        match lexer.look_ahead() {
+        match lexer.look_ahead()? {
             Token::NumberStart => {
-                let (number, _lexer) = parse_int(lexer);
+                let (number, _lexer) = parse_int(lexer)?;
                 list.push(BNode::Number(number));
 
                 lexer = _lexer;
             }
             Token::Length(_) => {
-                let (stream, _lexer) = parse_stream(lexer);
+                let (stream, _lexer) = parse_stream(lexer)?;
                 list.push(BNode::Stream(stream));
 
                 lexer = _lexer;
             }
             Token::ListStart => {
-                let (_list, _lexer) = parse_list(lexer);
+                let (_list, _lexer) = parse_list(lexer)?;
                 list.push(BNode::List(_list));
 
                 lexer = _lexer;
             }
             Token::DictStart => {
-                let (dict, _lexer) = parse_dict(lexer);
+                let (dict, _lexer) = parse_dict(lexer)?;
                 list.push(BNode::Dict(dict));
 
                 lexer = _lexer;
             }
             Token::ListEnd => {
-                lexer.next_token();
-                return (list, lexer);
+                lexer.next_token()?;
+                return Ok((list, lexer));
             }
             Token::EOF => {
-                return (list, lexer);
+                return Ok((list, lexer));
             }
-            _ => panic!("MSG: invalid list\nPOSITION: {}", lexer.position),
+            _ => {
+                return Err(Error::new("invalid list", lexer.position));
+            }
         }
     }
 }
 
-fn parse_dict<'a, T>(mut lexer: Lexer<'a, T>) -> (BDict, Lexer<'a, T>)
+fn parse_dict<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(BDict, Lexer<'a, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    assert_eq!(Token::DictStart, lexer.next_token());
+    assert_eq!(Token::DictStart, lexer.next_token()?);
     let mut dict = BDict::new();
     loop {
-        match lexer.look_ahead() {
+        match lexer.look_ahead()? {
             Token::Length(_) => {
-                let (raw_key, _lexer) = parse_stream(lexer);
+                let (raw_key, _lexer) = parse_stream(lexer)?;
                 let key = String::from_utf8(raw_key).unwrap();
-                let (value, _lexer) = parse_internal(_lexer);
+                let (value, _lexer) = parse_internal(_lexer)?;
 
                 lexer = _lexer;
 
                 dict.insert(key, value);
             }
             Token::DictEnd => {
-                lexer.next_token();
-                return (dict, lexer);
+                lexer.next_token()?;
+                return Ok((dict, lexer));
             }
-            _ => panic!("MSG: invalid dictionary\nPOSITION: {}", lexer.position),
+            _ => return Err(Error::new("invalid dictionary", lexer.position)),
         }
     }
 }
@@ -395,7 +423,7 @@ mod tests {
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        let value = lexer.read_i64_before(0, b'e');
+        let value = lexer.read_i64_before(0, b'e').unwrap();
         assert_eq!(2147483648, value);
     }
 
@@ -406,10 +434,10 @@ mod tests {
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        let raw_bytes = lexer.read_nbytes(3);
+        let raw_bytes = lexer.read_nbytes(3).unwrap();
         assert_eq!("ben".as_bytes(), &raw_bytes);
 
-        let raw_bytes = lexer.read_nbytes(4);
+        let raw_bytes = lexer.read_nbytes(4).unwrap();
         assert_eq!("code".as_bytes(), &raw_bytes);
     }
 
@@ -420,8 +448,8 @@ mod tests {
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        assert_eq!(Token::NumberStart, lexer.look_ahead());
-        assert_eq!(Token::NumberStart, lexer.look_ahead());
+        assert_eq!(Token::NumberStart, lexer.look_ahead().unwrap());
+        assert_eq!(Token::NumberStart, lexer.look_ahead().unwrap());
     }
 
     #[test]
@@ -436,7 +464,7 @@ mod tests {
             let mut bytes = str.bytes();
             let lexer = Lexer::new(&mut bytes);
 
-            let (value, _lexer) = parse_int(lexer);
+            let (value, _lexer) = parse_int(lexer).unwrap();
             assert_eq!(expected[x], value);
         }
     }
@@ -448,7 +476,7 @@ mod tests {
         let mut bytes = raw.bytes();
         let lexer = Lexer::new(&mut bytes);
 
-        let (stream, _lexer) = parse_stream(lexer);
+        let (stream, _lexer) = parse_stream(lexer).unwrap();
         assert_eq!("bencode".as_bytes(), &stream);
     }
 
@@ -459,7 +487,7 @@ mod tests {
         let mut bytes = raw.bytes();
         let lexer = Lexer::new(&mut bytes);
 
-        let (list, _lexer) = parse_list(lexer);
+        let (list, _lexer) = parse_list(lexer).unwrap();
         assert_eq!(3, list.len());
     }
 
@@ -468,7 +496,7 @@ mod tests {
         let raw = "ll5:helloe4:spami42ee";
 
         let mut bytes = raw.bytes();
-        let bnode = parse(&mut bytes);
+        let bnode = parse(&mut bytes).unwrap();
 
         let mut buf = vec![];
         bnode.marshal(&mut buf);
@@ -483,7 +511,7 @@ mod tests {
         let mut bytes = raw.bytes();
         let lexer = Lexer::new(&mut bytes);
 
-        let (dict, _lexer) = parse_dict(lexer);
+        let (dict, _lexer) = parse_dict(lexer).unwrap();
         assert_eq!(2, dict.len());
 
         match dict.get("bar").unwrap() {
@@ -506,7 +534,7 @@ mod tests {
         let raw = r#"d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:"Debian CD from cdimage.debian.org"13:creation datei1573903810e9:httpseedsl145:https://cdimage.debian.org/cdimage/release/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.iso145:https://cdimage.debian.org/cdimage/archive/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.isoe4:infod6:lengthi351272960e4:name31:debian-10.2.0-amd64-netinst.iso12:piece lengthi262144eee"#;
 
         let mut bytes = raw.bytes();
-        let bnode = parse(&mut bytes);
+        let bnode = parse(&mut bytes).unwrap();
 
         let mut buf = Vec::with_capacity(bytes.len());
         bnode.marshal(&mut buf);
