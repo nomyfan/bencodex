@@ -19,6 +19,12 @@ impl Error {
     }
 }
 
+macro_rules! throw {
+    ($msg:expr, $pos:expr) => {
+        return Err(Error::new($msg, $pos));
+    };
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub enum BNode {
@@ -139,10 +145,10 @@ where
                 b'0'..=b'9' => num = num * 10 + (x - b'0') as i64,
                 b'-' => match sign {
                     -1 if read != 1 => {
-                        return Err(Error::new(
+                        throw!(
                             "`-` can only appear in the head of the number",
-                            self.position,
-                        ));
+                            self.position
+                        )
                     }
                     _ => sign = -1,
                 },
@@ -150,13 +156,13 @@ where
                     self.cached_byte = Some(symbol);
                     return Ok(sign * num);
                 }
-                _ => return Err(Error::new("invalid number", self.position)),
+                _ => throw!("invalid number", self.position),
             }
 
             meet = self.next_byte();
         }
 
-        Err(Error::new("invalid number", self.position))
+        throw!("invalid number", self.position)
     }
 
     fn read_nbytes(&mut self, len: usize) -> Result<Vec<u8>> {
@@ -166,14 +172,14 @@ where
             match self.next_byte() {
                 Some(byte) => ret.push(byte),
                 None => {
-                    return Err(Error::new(
+                    throw!(
                         format!(
                             "stream's length is expected to be {}, but it's {}.",
                             len,
                             ret.len()
                         ),
-                        self.position,
-                    ));
+                        self.position
+                    );
                 }
             }
         }
@@ -223,10 +229,10 @@ where
                         Ok(Token::DictEnd)
                     }
                     _ => {
-                        return Err(Error::new(
+                        throw!(
                             "`e` should be the end of number, list and dictionary.",
-                            self.position,
-                        ));
+                            self.position
+                        )
                     }
                 },
                 b'0'..=b'9' => {
@@ -243,15 +249,9 @@ where
 
                         Ok(Token::Colon)
                     }
-                    _ => Err(Error::new(
-                        "`:` should be after the length of stream.",
-                        self.position,
-                    )),
+                    _ => throw!("`:` should be after the length of stream.", self.position),
                 },
-                _ => Err(Error::new(
-                    format!("unknown token: {}", unknown),
-                    self.position,
-                )),
+                _ => throw!(format!("unknown token: {}", unknown), self.position),
             },
             None => Ok(Token::EOF),
         }
@@ -303,7 +303,7 @@ where
 
             Ok((BNode::Dict(dict), _lexer))
         }
-        _ => Err(Error::new("invalid input", lexer.position)),
+        _ => throw!("invalid input", lexer.position),
     }
 }
 
@@ -332,7 +332,7 @@ where
 
             Ok((stream, lexer))
         }
-        _ => Err(Error::new("invalid input", lexer.position)),
+        _ => throw!("invalid input", lexer.position),
     }
 }
 
@@ -377,7 +377,7 @@ where
                 return Ok((list, lexer));
             }
             _ => {
-                return Err(Error::new("invalid list", lexer.position));
+                throw!("invalid list", lexer.position);
             }
         }
     }
@@ -404,7 +404,7 @@ where
                 lexer.next_token()?;
                 return Ok((dict, lexer));
             }
-            _ => return Err(Error::new("invalid dictionary", lexer.position)),
+            _ => throw!("invalid dictionary", lexer.position),
         }
     }
 }
