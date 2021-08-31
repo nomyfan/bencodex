@@ -544,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_failed() {
+    fn test_parse_stream_failed() {
         let cases = vec!["5:hello2", "5:halo", "521"];
         let len = cases.len();
         for i in 0..len {
@@ -574,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_failed() {
+    fn test_parse_list_failed() {
         let cases = vec!["l4:halo"];
         let len = cases.len();
         for i in 0..len {
@@ -625,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_map_failed() {
+    fn test_parse_dict_failed() {
         let cases = vec!["d4:haloi23e", "di23e4:haloe"];
         for x in &cases {
             match parse(&mut x.bytes()) {
