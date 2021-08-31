@@ -91,6 +91,7 @@ enum Token {
     EOF,
 }
 
+#[derive(Debug)]
 pub struct Lexer<'a, T>
 where
     T: Iterator<Item = u8>,
@@ -439,6 +440,55 @@ mod tests {
 
         let raw_bytes = lexer.read_nbytes(4).unwrap();
         assert_eq!("code".as_bytes(), &raw_bytes);
+    }
+
+    #[test]
+    fn test_lexer_position_case1() {
+        let raw = "bencode";
+
+        let mut bytes = raw.bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        let _ = lexer.read_nbytes(3).unwrap();
+        assert_eq!(2, lexer.position);
+
+        let _ = lexer.read_nbytes(4).unwrap();
+        assert_eq!(6, lexer.position);
+    }
+
+    #[test]
+    fn test_lexer_position_case2() {
+        let raw = "i56e";
+
+        let mut bytes = raw.bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        let _ = lexer.look_ahead().unwrap();
+        assert_eq!(0, lexer.position);
+
+        let _ = lexer.look_ahead().unwrap();
+        assert_eq!(0, lexer.position);
+    }
+
+    #[test]
+    fn test_lexer_position_case3() {
+        let raw = "7:bencode";
+
+        let mut bytes = raw.bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        let _ = lexer.look_ahead().unwrap();
+        assert_eq!(1, lexer.position);
+    }
+
+    #[test]
+    fn test_lexer_position_case4() {
+        let raw = "i-2-0e";
+
+        let mut bytes = raw.bytes();
+        let lexer = Lexer::new(&mut bytes);
+
+        assert_eq!(3, parse_number(lexer).unwrap_err().position)
     }
 
     #[test]
