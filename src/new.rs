@@ -320,7 +320,7 @@ where
     let (value, read) = lexer.read_i64_before(0, b'e')?;
 
     if read < 1 {
-        throw!("Number cannot be empty", lexer.position) // TODO this position is OK?
+        throw!("Number cannot be empty", lexer.position)
     }
 
     assert_eq!(Token::NumberEnd, lexer.next_token()?);
