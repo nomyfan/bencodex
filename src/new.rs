@@ -143,7 +143,17 @@ where
             read += 1;
 
             match x {
-                b'0'..=b'9' => num = num * 10 + (x - b'0') as i64,
+                b'0'..=b'9' => {
+                    if x == b'0' && sign == -1 && read == 2 {
+                        throw!("Negative zero is not permitted", self.position)
+                    }
+
+                    if num == 0 && ((sign == 1 && read != 1) || (sign == -1 && read != 2)) {
+                        throw!("Leading zero is not permitted", self.position)
+                    }
+
+                    num = num * 10 + (x - b'0') as i64
+                }
                 b'-' => match sign {
                     -1 if read != 1 => {
                         throw!(
@@ -420,12 +430,43 @@ mod tests {
 
     #[test]
     fn test_lexer_read_i64_before() {
-        let raw = "2147483648e";
+        let raws = ["2147483648e", "0e"];
+        let ret = [2147483648, 0];
+
+        for i in 0..raws.len() {
+            let raw = raws[i];
+            let mut bytes = raw.bytes();
+            let mut lexer = Lexer::new(&mut bytes);
+
+            let (value, _) = lexer.read_i64_before(0, b'e').unwrap();
+            assert_eq!(ret[i], value);
+        }
+    }
+
+    #[test]
+    fn test_lexer_read_negative_zero() {
+        let raw = "-0e";
+
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        let (value, _) = lexer.read_i64_before(0, b'e').unwrap();
-        assert_eq!(2147483648, value);
+        let _ = lexer
+            .read_i64_before(0, b'e')
+            .expect_err("Negative zero is not permitted");
+    }
+
+    #[test]
+    fn test_lexer_no_leading_zero() {
+        let raws = ["00e", "01e"];
+
+        for raw in raws.iter() {
+            let mut bytes = raw.bytes();
+            let mut lexer = Lexer::new(&mut bytes);
+
+            let _ = lexer
+                .read_i64_before(0, b'e')
+                .expect_err("Leading zero is not permitted");
+        }
     }
 
     #[test]
