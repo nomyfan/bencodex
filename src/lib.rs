@@ -1,6 +1,6 @@
 #![allow(semicolon_in_expressions_from_macros)]
 
-use std::io::Write;
+use std::{fmt::Display, io::Write};
 pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
 
@@ -21,8 +21,9 @@ macro_rules! throw {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum BNode {
-    Int(i64),
+    Integer(i64),
     Bytes(Vec<u8>),
     List(BList),
     Dict(BDict),
@@ -35,7 +36,7 @@ impl BNode {
     {
         let mut w = 0;
         match self {
-            BNode::Int(i) => {
+            BNode::Integer(i) => {
                 w += buf.write(b"i")?;
                 w += buf.write(i.to_string().as_bytes())?;
                 w += buf.write(b"e")?;
@@ -66,14 +67,54 @@ impl BNode {
 
         Ok(w)
     }
+
+    pub fn as_integer(&self) -> std::result::Result<&i64, String> {
+        match self {
+            BNode::Integer(value) => Ok(value),
+            _ => Err("not an integer".into()),
+        }
+    }
+
+    pub fn as_bytes(&self) -> std::result::Result<&[u8], String> {
+        match self {
+            BNode::Bytes(bytes) => Ok(bytes),
+            _ => Err("not a byte array".into()),
+        }
+    }
+
+    pub fn as_list(&self) -> std::result::Result<&[BNode], String> {
+        match self {
+            BNode::List(list) => Ok(list),
+            _ => Err("not a list".into()),
+        }
+    }
+
+    pub fn as_dict(&self) -> std::result::Result<&BDict, String> {
+        match self {
+            BNode::Dict(dict) => Ok(dict),
+            _ => Err("not a dictionary".into()),
+        }
+    }
+}
+
+impl Display for BNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        let mut buf = vec![];
+
+        // TODO: return error
+        self.marshal(&mut buf).unwrap();
+        write!(f, "{}", std::str::from_utf8(&buf).unwrap()).unwrap();
+
+        Ok(())
+    }
 }
 
 /// https://en.wikipedia.org/wiki/Bencode
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Token {
-    IntBegin,
-    IntEnd,
+    IntegerBegin,
+    IntegerEnd,
     ListBegin,
     ListEnd,
     DictBegin,
@@ -84,7 +125,7 @@ enum Token {
 }
 
 #[derive(Debug)]
-pub struct Lexer<'a, T>
+struct Lexer<'a, T>
 where
     T: Iterator<Item = u8>,
 {
@@ -146,7 +187,7 @@ where
                 b'-' => match sign {
                     -1 if read != 1 => {
                         throw!(
-                            "`-` can only appear in the head of the number",
+                            "`-` can only appear in the head of the integer",
                             self.position
                         )
                     }
@@ -156,11 +197,11 @@ where
                     self.cached_byte = Some(symbol);
                     return Ok((sign * num, read - 1));
                 }
-                _ => throw!("invalid number", self.position),
+                _ => throw!("invalid integer", self.position),
             }
         }
 
-        throw!("invalid number", self.position)
+        throw!("invalid integer", self.position)
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>> {
@@ -193,10 +234,10 @@ where
         match self.next_byte() {
             Some(unknown) => match unknown {
                 b'i' => {
-                    self.current_token = Some(Token::IntBegin);
-                    self.token_stack.push(Token::IntBegin);
+                    self.current_token = Some(Token::IntegerBegin);
+                    self.token_stack.push(Token::IntegerBegin);
 
-                    Ok(Token::IntBegin)
+                    Ok(Token::IntegerBegin)
                 }
                 b'l' => {
                     self.current_token = Some(Token::ListBegin);
@@ -211,10 +252,10 @@ where
                     Ok(Token::DictBegin)
                 }
                 b'e' => match &self.token_stack.pop() {
-                    Some(Token::IntBegin) => {
+                    Some(Token::IntegerBegin) => {
                         self.current_token = None;
 
-                        Ok(Token::IntEnd)
+                        Ok(Token::IntegerEnd)
                     }
                     Some(Token::ListBegin) => {
                         self.current_token = None;
@@ -228,7 +269,7 @@ where
                     }
                     _ => {
                         throw!(
-                            "`e` should be the end of number, list and dictionary.",
+                            "`e` should be the end of integer, list and dictionary.",
                             self.position
                         )
                     }
@@ -267,7 +308,7 @@ where
     }
 }
 
-struct Parser<'a, T>
+pub struct Parser<'a, T>
 where
     T: Iterator<Item = u8>,
 {
@@ -301,43 +342,27 @@ where
         T: Iterator<Item = u8>,
     {
         match self.lexer.look_ahead()? {
-            Token::IntBegin => {
-                let number = self.parse_number()?;
-
-                Ok(BNode::Int(number))
-            }
-            Token::Length(_) => {
-                let bytes = self.parse_bytes()?;
-
-                Ok(BNode::Bytes(bytes))
-            }
-            Token::ListBegin => {
-                let list = self.parse_list()?;
-
-                Ok(BNode::List(list))
-            }
-            Token::DictBegin => {
-                let dict = self.parse_dict()?;
-
-                Ok(BNode::Dict(dict))
-            }
+            Token::IntegerBegin => Ok(BNode::Integer(self.parse_integer()?)),
+            Token::Length(_) => Ok(BNode::Bytes(self.parse_bytes()?)),
+            Token::ListBegin => Ok(BNode::List(self.parse_list()?)),
+            Token::DictBegin => Ok(BNode::Dict(self.parse_dict()?)),
             _ => throw!("invalid input", self.lexer.position),
         }
     }
 
-    fn parse_number(&mut self) -> Result<i64>
+    fn parse_integer(&mut self) -> Result<i64>
     where
         T: Iterator<Item = u8>,
     {
-        assert_eq!(Token::IntBegin, self.lexer.next_token()?);
+        assert_eq!(Token::IntegerBegin, self.lexer.next_token()?);
 
         let (value, read) = self.lexer.read_i64_before(0, b'e')?;
 
         if read < 1 {
-            throw!("Number cannot be empty", self.lexer.position)
+            throw!("Integer cannot be empty", self.lexer.position)
         }
 
-        assert_eq!(Token::IntEnd, self.lexer.next_token()?);
+        assert_eq!(Token::IntegerEnd, self.lexer.next_token()?);
 
         Ok(value)
     }
@@ -365,21 +390,17 @@ where
 
         loop {
             match self.lexer.look_ahead()? {
-                Token::IntBegin => {
-                    let number = self.parse_number()?;
-                    list.push(BNode::Int(number));
+                Token::IntegerBegin => {
+                    list.push(BNode::Integer(self.parse_integer()?));
                 }
                 Token::Length(_) => {
-                    let stream = self.parse_bytes()?;
-                    list.push(BNode::Bytes(stream));
+                    list.push(BNode::Bytes(self.parse_bytes()?));
                 }
                 Token::ListBegin => {
-                    let _list = self.parse_list()?;
-                    list.push(BNode::List(_list));
+                    list.push(BNode::List(self.parse_list()?));
                 }
                 Token::DictBegin => {
-                    let dict = self.parse_dict()?;
-                    list.push(BNode::Dict(dict));
+                    list.push(BNode::Dict(self.parse_dict()?));
                 }
                 Token::ListEnd => {
                     self.lexer.next_token()?;
@@ -414,6 +435,14 @@ where
             }
         }
     }
+}
+
+pub fn parse<T>(stream: &mut T) -> Result<BNode>
+where
+    T: Iterator<Item = u8>,
+{
+    let mut parser = Parser::new(stream);
+    parser.parse()
 }
 
 #[cfg(test)]
@@ -519,7 +548,7 @@ mod tests {
         let mut bytes = "i-2-0e".bytes();
         let mut parser = Parser::new(&mut bytes);
 
-        assert_eq!(3, parser.parse_number().unwrap_err().position)
+        assert_eq!(3, parser.parse_integer().unwrap_err().position)
     }
 
     #[test]
@@ -527,25 +556,25 @@ mod tests {
         let mut bytes = "i256e".bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        assert_eq!(Token::IntBegin, lexer.look_ahead().unwrap());
-        assert_eq!(Token::IntBegin, lexer.look_ahead().unwrap());
+        assert_eq!(Token::IntegerBegin, lexer.look_ahead().unwrap());
+        assert_eq!(Token::IntegerBegin, lexer.look_ahead().unwrap());
     }
 
     #[test]
-    fn test_parse_number() {
+    fn test_parse_integer() {
         let raw = ["i256e", "i-1024e"];
         let expected = [256, -1024];
         for (raw, expected) in raw.iter().zip(expected) {
             let mut bytes = raw.bytes();
             let mut parser = Parser::new(&mut bytes);
 
-            let value = parser.parse_number().unwrap();
+            let value = parser.parse_integer().unwrap();
             assert_eq!(expected, value);
         }
     }
 
     #[test]
-    fn test_parse_number_failed() {
+    fn test_parse_integer_failed() {
         let cases = ["i2522", "ie", "i", "i-12-3e", "i13ee"];
         for (i, _) in cases.iter().enumerate() {
             let x = cases[i];
@@ -558,16 +587,16 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_stream() {
+    fn test_parse_bytes() {
         let mut bytes = "7:bencode".bytes();
         let mut parser = Parser::new(&mut bytes);
 
-        let stream = parser.parse_bytes().unwrap();
-        assert_eq!("bencode".as_bytes(), &stream);
+        let bytes = parser.parse_bytes().unwrap();
+        assert_eq!("bencode".as_bytes(), &bytes);
     }
 
     #[test]
-    fn test_parse_stream_failed() {
+    fn test_parse_bytes_failed() {
         let cases = ["5:hello2", "5:halo", "521"];
         for (i, _) in cases.iter().enumerate() {
             let mut bytes = cases[i].bytes();
@@ -615,7 +644,7 @@ mod tests {
         let bnode = parser.parse().unwrap();
 
         let mut buf = vec![];
-        bnode.marshal(&mut buf);
+        let _ = bnode.marshal(&mut buf).unwrap();
 
         assert_eq!(raw.as_bytes(), &buf);
     }
@@ -631,14 +660,14 @@ mod tests {
         assert_eq!(2, dict.len());
 
         match dict.get("bar").unwrap() {
-            BNode::Bytes(stream) => {
-                assert_eq!(&stream, &"spam".as_bytes());
+            BNode::Bytes(bytes) => {
+                assert_eq!(&bytes, &"spam".as_bytes());
             }
             _ => panic!("`bar` should have the value `spam`"),
         }
 
         match dict.get("foo").unwrap() {
-            BNode::Int(iv) => {
+            BNode::Integer(iv) => {
                 assert_eq!(&42, iv);
             }
             _ => panic!("`foo` should have the value `42`"),
@@ -666,7 +695,7 @@ mod tests {
         let bnode = parser.parse().unwrap();
 
         let mut buf = Vec::with_capacity(bytes.len());
-        bnode.marshal(&mut buf);
+        let _ = bnode.marshal(&mut buf);
 
         assert_eq!(&raw.as_bytes(), &buf);
     }
