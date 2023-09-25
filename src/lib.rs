@@ -358,7 +358,7 @@ where
     where
         T: Iterator<Item = u8>,
     {
-        assert_eq!(Token::DictBegin, self.lexer.next_token()?);
+        debug_assert_eq!(Token::DictBegin, self.lexer.next_token()?);
         let mut dict = BDict::new();
         loop {
             match self.lexer.look_ahead()? {
