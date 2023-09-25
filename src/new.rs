@@ -1,4 +1,6 @@
 #![allow(semicolon_in_expressions_from_macros)]
+
+use std::io::Write;
 pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
 
@@ -27,36 +29,42 @@ pub enum BNode {
 }
 
 impl BNode {
-    pub fn marshal(&self, buf: &mut Vec<u8>) {
+    pub fn marshal<W>(&self, buf: &mut W) -> std::io::Result<usize>
+    where
+        W: Write,
+    {
+        let mut w = 0;
         match self {
             BNode::Int(i) => {
-                buf.push(b'i');
-                buf.extend(i.to_string().as_bytes());
-                buf.push(b'e');
+                w += buf.write(b"i")?;
+                w += buf.write(i.to_string().as_bytes())?;
+                w += buf.write(b"e")?;
             }
             BNode::Bytes(s) => {
-                buf.extend(s.len().to_string().as_bytes());
-                buf.push(b':');
-                buf.extend(s);
+                w += buf.write(s.len().to_string().as_bytes())?;
+                w += buf.write(b":")?;
+                w += buf.write(s)?;
             }
             BNode::List(l) => {
-                buf.push(b'l');
+                w += buf.write(b"l")?;
                 for bn in l {
-                    bn.marshal(buf);
+                    w += bn.marshal(buf)?;
                 }
-                buf.push(b'e');
+                w += buf.write(b"e")?;
             }
             BNode::Dict(m) => {
-                buf.push(b'd');
+                w += buf.write(b"d")?;
                 for (k, v) in m {
-                    buf.extend(k.len().to_string().as_bytes());
-                    buf.push(b':');
-                    buf.extend(k.as_bytes());
-                    v.marshal(buf);
+                    w += buf.write(k.len().to_string().as_bytes())?;
+                    w += buf.write(b":")?;
+                    w += buf.write(k.as_bytes())?;
+                    w += v.marshal(buf)?;
                 }
-                buf.push(b'e');
+                w += buf.write(b"e")?;
             }
         }
+
+        Ok(w)
     }
 }
 
@@ -259,153 +267,158 @@ where
     }
 }
 
-pub fn parse<T>(stream: &mut T) -> Result<BNode>
+struct Parser<'a, T>
 where
     T: Iterator<Item = u8>,
 {
-    let (node, mut _lexer) = parse_internal(Lexer::new(stream))?;
-
-    match _lexer.next_token()? {
-        Token::EOF => Ok(node),
-        _ => throw!("Expect EOF", _lexer.position),
-    }
+    lexer: Lexer<'a, T>,
 }
 
-fn parse_internal<T>(mut lexer: Lexer<'_, T>) -> Result<(BNode, Lexer<'_, T>)>
+impl<'a, T> Parser<'a, T>
 where
     T: Iterator<Item = u8>,
 {
-    match lexer.look_ahead()? {
-        Token::IntBegin => {
-            let (number, _lexer) = parse_number(lexer)?;
-
-            Ok((BNode::Int(number), _lexer))
+    pub fn new(stream: &'a mut T) -> Parser<'a, T> {
+        Parser {
+            lexer: Lexer::new(stream),
         }
-        Token::Length(_) => {
-            let (stream, _lexer) = parse_stream(lexer)?;
-
-            Ok((BNode::Bytes(stream), _lexer))
-        }
-        Token::ListBegin => {
-            let (list, _lexer) = parse_list(lexer)?;
-
-            Ok((BNode::List(list), _lexer))
-        }
-        Token::DictBegin => {
-            let (dict, _lexer) = parse_dict(lexer)?;
-
-            Ok((BNode::Dict(dict), _lexer))
-        }
-        _ => throw!("invalid input", lexer.position),
-    }
-}
-
-fn parse_number<T>(mut lexer: Lexer<'_, T>) -> Result<(i64, Lexer<'_, T>)>
-where
-    T: Iterator<Item = u8>,
-{
-    assert_eq!(Token::IntBegin, lexer.next_token()?);
-
-    let (value, read) = lexer.read_i64_before(0, b'e')?;
-
-    if read < 1 {
-        throw!("Number cannot be empty", lexer.position)
     }
 
-    assert_eq!(Token::IntEnd, lexer.next_token()?);
+    pub fn parse(&mut self) -> Result<BNode>
+    where
+        T: Iterator<Item = u8>,
+    {
+        let node = self.parse_internal()?;
 
-    Ok((value, lexer))
-}
-
-fn parse_stream<T>(mut lexer: Lexer<'_, T>) -> Result<(Vec<u8>, Lexer<'_, T>)>
-where
-    T: Iterator<Item = u8>,
-{
-    let next_token = lexer.next_token()?;
-    match next_token {
-        Token::Length(len) => {
-            assert_eq!(Token::Colon, lexer.next_token()?);
-            let stream = lexer.read_bytes(len as usize)?;
-
-            Ok((stream, lexer))
+        match self.lexer.next_token()? {
+            Token::EOF => Ok(node),
+            _ => throw!("Expect EOF", self.lexer.position),
         }
-        _ => throw!("invalid input", lexer.position),
     }
-}
 
-fn parse_list<T>(mut lexer: Lexer<'_, T>) -> Result<(BList, Lexer<'_, T>)>
-where
-    T: Iterator<Item = u8>,
-{
-    assert_eq!(Token::ListBegin, lexer.next_token()?);
-    let mut list = vec![];
-
-    loop {
-        match lexer.look_ahead()? {
+    fn parse_internal(&mut self) -> Result<BNode>
+    where
+        T: Iterator<Item = u8>,
+    {
+        match self.lexer.look_ahead()? {
             Token::IntBegin => {
-                let (number, _lexer) = parse_number(lexer)?;
-                list.push(BNode::Int(number));
+                let number = self.parse_number()?;
 
-                lexer = _lexer;
+                Ok(BNode::Int(number))
             }
             Token::Length(_) => {
-                let (stream, _lexer) = parse_stream(lexer)?;
-                list.push(BNode::Bytes(stream));
+                let bytes = self.parse_bytes()?;
 
-                lexer = _lexer;
+                Ok(BNode::Bytes(bytes))
             }
             Token::ListBegin => {
-                let (_list, _lexer) = parse_list(lexer)?;
-                list.push(BNode::List(_list));
+                let list = self.parse_list()?;
 
-                lexer = _lexer;
+                Ok(BNode::List(list))
             }
             Token::DictBegin => {
-                let (dict, _lexer) = parse_dict(lexer)?;
-                list.push(BNode::Dict(dict));
+                let dict = self.parse_dict()?;
 
-                lexer = _lexer;
+                Ok(BNode::Dict(dict))
             }
-            Token::ListEnd => {
-                lexer.next_token()?;
-                return Ok((list, lexer));
+            _ => throw!("invalid input", self.lexer.position),
+        }
+    }
+
+    fn parse_number(&mut self) -> Result<i64>
+    where
+        T: Iterator<Item = u8>,
+    {
+        assert_eq!(Token::IntBegin, self.lexer.next_token()?);
+
+        let (value, read) = self.lexer.read_i64_before(0, b'e')?;
+
+        if read < 1 {
+            throw!("Number cannot be empty", self.lexer.position)
+        }
+
+        assert_eq!(Token::IntEnd, self.lexer.next_token()?);
+
+        Ok(value)
+    }
+
+    fn parse_bytes(&mut self) -> Result<Vec<u8>>
+    where
+        T: Iterator<Item = u8>,
+    {
+        let next_token = self.lexer.next_token()?;
+        match next_token {
+            Token::Length(len) => {
+                assert_eq!(Token::Colon, self.lexer.next_token()?);
+                Ok(self.lexer.read_bytes(len as usize)?)
             }
-            _ => {
-                throw!("invalid list", lexer.position);
+            _ => throw!("invalid input", self.lexer.position),
+        }
+    }
+
+    fn parse_list(&mut self) -> Result<BList>
+    where
+        T: Iterator<Item = u8>,
+    {
+        assert_eq!(Token::ListBegin, self.lexer.next_token()?);
+        let mut list = vec![];
+
+        loop {
+            match self.lexer.look_ahead()? {
+                Token::IntBegin => {
+                    let number = self.parse_number()?;
+                    list.push(BNode::Int(number));
+                }
+                Token::Length(_) => {
+                    let stream = self.parse_bytes()?;
+                    list.push(BNode::Bytes(stream));
+                }
+                Token::ListBegin => {
+                    let _list = self.parse_list()?;
+                    list.push(BNode::List(_list));
+                }
+                Token::DictBegin => {
+                    let dict = self.parse_dict()?;
+                    list.push(BNode::Dict(dict));
+                }
+                Token::ListEnd => {
+                    self.lexer.next_token()?;
+                    return Ok(list);
+                }
+                _ => {
+                    throw!("invalid list", self.lexer.position);
+                }
             }
         }
     }
-}
 
-fn parse_dict<T>(mut lexer: Lexer<'_, T>) -> Result<(BDict, Lexer<'_, T>)>
-where
-    T: Iterator<Item = u8>,
-{
-    assert_eq!(Token::DictBegin, lexer.next_token()?);
-    let mut dict = BDict::new();
-    loop {
-        match lexer.look_ahead()? {
-            Token::Length(_) => {
-                let (raw_key, _lexer) = parse_stream(lexer)?;
-                let key = String::from_utf8(raw_key).unwrap();
-                let (value, _lexer) = parse_internal(_lexer)?;
-
-                lexer = _lexer;
-
-                dict.insert(key, value);
+    fn parse_dict(&mut self) -> Result<BDict>
+    where
+        T: Iterator<Item = u8>,
+    {
+        assert_eq!(Token::DictBegin, self.lexer.next_token()?);
+        let mut dict = BDict::new();
+        loop {
+            match self.lexer.look_ahead()? {
+                Token::Length(_) => {
+                    let raw_key = self.parse_bytes()?;
+                    let key = String::from_utf8(raw_key).unwrap();
+                    let value = self.parse_internal()?;
+                    dict.insert(key, value);
+                }
+                Token::DictEnd => {
+                    self.lexer.next_token()?;
+                    return Ok(dict);
+                }
+                _ => throw!("invalid dictionary", self.lexer.position),
             }
-            Token::DictEnd => {
-                lexer.next_token()?;
-                return Ok((dict, lexer));
-            }
-            _ => throw!("invalid dictionary", lexer.position),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, parse_dict, parse_number, parse_stream, BNode, Lexer, Token};
+    use super::{BNode, Lexer, Parser, Token};
 
     #[test]
     fn test_lexer_read_i64_before() {
@@ -449,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lexer_read_nbytes() {
+    fn test_lexer_read_bytes() {
         let raw = "bencode";
 
         let mut bytes = raw.bytes();
@@ -503,19 +516,15 @@ mod tests {
 
     #[test]
     fn test_lexer_position_case4() {
-        let raw = "i-2-0e";
+        let mut bytes = "i-2-0e".bytes();
+        let mut parser = Parser::new(&mut bytes);
 
-        let mut bytes = raw.bytes();
-        let lexer = Lexer::new(&mut bytes);
-
-        assert_eq!(3, parse_number(lexer).unwrap_err().position)
+        assert_eq!(3, parser.parse_number().unwrap_err().position)
     }
 
     #[test]
     fn test_lexer_look_ahead() {
-        let raw = "i256e";
-
-        let mut bytes = raw.bytes();
+        let mut bytes = "i256e".bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
         assert_eq!(Token::IntBegin, lexer.look_ahead().unwrap());
@@ -526,16 +535,12 @@ mod tests {
     fn test_parse_number() {
         let raw = ["i256e", "i-1024e"];
         let expected = [256, -1024];
-        let len = raw.len();
+        for (raw, expected) in raw.iter().zip(expected) {
+            let mut bytes = raw.bytes();
+            let mut parser = Parser::new(&mut bytes);
 
-        for x in 0..len {
-            let str = raw[x];
-
-            let mut bytes = str.bytes();
-            let lexer = Lexer::new(&mut bytes);
-
-            let (value, _lexer) = parse_number(lexer).unwrap();
-            assert_eq!(expected[x], value);
+            let value = parser.parse_number().unwrap();
+            assert_eq!(expected, value);
         }
     }
 
@@ -544,7 +549,9 @@ mod tests {
         let cases = ["i2522", "ie", "i", "i-12-3e", "i13ee"];
         for (i, _) in cases.iter().enumerate() {
             let x = cases[i];
-            if parse(&mut x.bytes()).is_ok() {
+            let mut bytes = x.bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
                 panic!("{}-th should fail", i);
             }
         }
@@ -552,12 +559,10 @@ mod tests {
 
     #[test]
     fn test_parse_stream() {
-        let raw = "7:bencode";
+        let mut bytes = "7:bencode".bytes();
+        let mut parser = Parser::new(&mut bytes);
 
-        let mut bytes = raw.bytes();
-        let lexer = Lexer::new(&mut bytes);
-
-        let (stream, _lexer) = parse_stream(lexer).unwrap();
+        let stream = parser.parse_bytes().unwrap();
         assert_eq!("bencode".as_bytes(), &stream);
     }
 
@@ -565,8 +570,9 @@ mod tests {
     fn test_parse_stream_failed() {
         let cases = ["5:hello2", "5:halo", "521"];
         for (i, _) in cases.iter().enumerate() {
-            let x = cases[i];
-            if parse(&mut x.bytes()).is_ok() {
+            let mut bytes = cases[i].bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
                 panic!("{}-th should fail", i);
             }
         }
@@ -576,12 +582,13 @@ mod tests {
     fn test_parse_list() {
         let cases = ["li256e7:bencodeli256e7:bencodeee", "l4:spami42ee", "le"];
         for (i, _) in cases.iter().enumerate() {
-            let x = cases[i];
-            match parse(&mut x.bytes()) {
+            let mut bytes = cases[i].bytes();
+            let mut parser = Parser::new(&mut bytes);
+            match parser.parse() {
                 Ok(node) => {
                     let mut buf = vec![];
-                    node.marshal(&mut buf);
-                    assert_eq!(x.as_bytes(), &buf)
+                    let _ = node.marshal(&mut buf);
+                    assert_eq!(cases[i].as_bytes(), &buf)
                 }
                 Err(e) => std::panic::panic_any(e),
             }
@@ -592,8 +599,9 @@ mod tests {
     fn test_parse_list_failed() {
         let cases = ["l4:halo"];
         for (i, _) in cases.iter().enumerate() {
-            let x = cases[i];
-            if parse(&mut x.bytes()).is_ok() {
+            let mut bytes = cases[i].bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
                 panic!("{}-th should fail", i);
             }
         }
@@ -602,9 +610,9 @@ mod tests {
     #[test]
     fn test_parse_nested_list() {
         let raw = "ll5:helloe4:spami42ee";
-
         let mut bytes = raw.bytes();
-        let bnode = parse(&mut bytes).unwrap();
+        let mut parser = Parser::new(&mut bytes);
+        let bnode = parser.parse().unwrap();
 
         let mut buf = vec![];
         bnode.marshal(&mut buf);
@@ -617,9 +625,9 @@ mod tests {
         let raw = "d3:bar4:spam3:fooi42ee";
 
         let mut bytes = raw.bytes();
-        let lexer = Lexer::new(&mut bytes);
+        let mut parser = Parser::new(&mut bytes);
 
-        let (dict, _lexer) = parse_dict(lexer).unwrap();
+        let dict = parser.parse_dict().unwrap();
         assert_eq!(2, dict.len());
 
         match dict.get("bar").unwrap() {
@@ -641,7 +649,9 @@ mod tests {
     fn test_parse_dict_failed() {
         let cases = ["d4:haloi23e", "di23e4:haloe"];
         for x in &cases {
-            if parse(&mut x.bytes()).is_ok() {
+            let mut bytes = x.bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
                 panic!("Should fail");
             }
         }
@@ -652,7 +662,8 @@ mod tests {
         let raw = r#"d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:"Debian CD from cdimage.debian.org"13:creation datei1573903810e9:httpseedsl145:https://cdimage.debian.org/cdimage/release/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.iso145:https://cdimage.debian.org/cdimage/archive/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.isoe4:infod6:lengthi351272960e4:name31:debian-10.2.0-amd64-netinst.iso12:piece lengthi262144eee"#;
 
         let mut bytes = raw.bytes();
-        let bnode = parse(&mut bytes).unwrap();
+        let mut parser = Parser::new(&mut bytes);
+        let bnode = parser.parse().unwrap();
 
         let mut buf = Vec::with_capacity(bytes.len());
         bnode.marshal(&mut buf);
