@@ -1,472 +1,640 @@
-use std::fmt::Display;
+#![allow(semicolon_in_expressions_from_macros)]
 
+mod extensions;
+
+use std::{fmt::Display, io::Write};
 pub type BList = Vec<BNode>;
-pub type BMap = std::collections::BTreeMap<String, BNode>;
+pub type BDict = std::collections::BTreeMap<String, BNode>;
 
+#[derive(Debug)]
+pub struct Error {
+    pub position: i64,
+    pub msg: String,
+}
+
+macro_rules! throw {
+    ($msg:expr, $pos:expr) => {
+        return Err(Error {
+            msg: $msg.into(),
+            position: $pos,
+        });
+    };
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum BNode {
-    Int(i64),
-    Str(Vec<u8>),
+    Integer(i64),
+    Bytes(Vec<u8>),
     List(BList),
-    Map(BMap),
+    Dict(BDict),
 }
 
 impl BNode {
-    pub fn marshal(&self, buf: &mut Vec<u8>) {
+    pub fn serialize<W>(&self, buf: &mut W) -> std::io::Result<usize>
+    where
+        W: Write,
+    {
+        let mut w = 0;
         match self {
-            BNode::Int(i) => {
-                buf.push(b'i');
-                push_all(i.to_string().as_bytes(), buf);
-                buf.push(b'e');
+            BNode::Integer(i) => {
+                w += buf.write(b"i")?;
+                w += buf.write(i.to_string().as_bytes())?;
+                w += buf.write(b"e")?;
             }
-            BNode::Str(s) => {
-                push_all(s.len().to_string().as_bytes(), buf);
-                buf.push(b':');
-                push_all(s, buf);
+            BNode::Bytes(s) => {
+                w += buf.write(s.len().to_string().as_bytes())?;
+                w += buf.write(b":")?;
+                w += buf.write(s)?;
             }
             BNode::List(l) => {
-                buf.push(b'l');
+                w += buf.write(b"l")?;
                 for bn in l {
-                    bn.marshal(buf);
+                    w += bn.serialize(buf)?;
                 }
-                buf.push(b'e');
+                w += buf.write(b"e")?;
             }
-            BNode::Map(m) => {
-                buf.push(b'd');
+            BNode::Dict(m) => {
+                w += buf.write(b"d")?;
                 for (k, v) in m {
-                    push_all(k.len().to_string().as_bytes(), buf);
-                    buf.push(b':');
-                    push_all(k.as_bytes(), buf);
-                    v.marshal(buf);
+                    w += buf.write(k.len().to_string().as_bytes())?;
+                    w += buf.write(b":")?;
+                    w += buf.write(k.as_bytes())?;
+                    w += v.serialize(buf)?;
                 }
-                buf.push(b'e');
+                w += buf.write(b"e")?;
             }
         }
+
+        Ok(w)
     }
 
-    pub fn as_int(&self) -> Option<i64> {
-        if let BNode::Int(int) = self {
-            return Some(*int);
+    pub fn as_integer(&self) -> std::result::Result<&i64, String> {
+        match self {
+            BNode::Integer(value) => Ok(value),
+            _ => Err("not an integer".into()),
         }
-        None
     }
 
-    pub fn as_raw_str(&self) -> Option<&[u8]> {
-        if let BNode::Str(s) = self {
-            return Some(s);
+    pub fn as_bytes(&self) -> std::result::Result<&[u8], String> {
+        match self {
+            BNode::Bytes(bytes) => Ok(bytes),
+            _ => Err("not a byte array".into()),
         }
-        None
     }
 
-    pub fn as_string(&self) -> Option<String> {
-        if let BNode::Str(s) = self {
-            return Some(raw_str_to_string(s));
+    pub fn as_list(&self) -> std::result::Result<&[BNode], String> {
+        match self {
+            BNode::List(list) => Ok(list),
+            _ => Err("not a list".into()),
         }
-        None
     }
 
-    pub fn as_list(&self) -> Option<&BList> {
-        if let BNode::List(lst) = self {
-            return Some(lst);
+    pub fn as_dict(&self) -> std::result::Result<&BDict, String> {
+        match self {
+            BNode::Dict(dict) => Ok(dict),
+            _ => Err("not a dictionary".into()),
         }
-        None
-    }
-
-    pub fn as_map(&self) -> Option<&BMap> {
-        if let BNode::Map(m) = self {
-            return Some(m);
-        }
-        None
     }
 }
 
 impl Display for BNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        match self {
-            BNode::Int(i) => write!(f, "i{}e", i),
-            BNode::Str(s) => write!(f, "{}:{}", &s.len(), &raw_str_to_string(s)),
-            BNode::List(l) => {
-                write!(f, "l")?;
-                for n in l {
-                    Display::fmt(&n, f)?;
+        let mut buf = vec![];
+
+        self.serialize(&mut buf).unwrap();
+        write!(f, "{}", std::str::from_utf8(&buf).unwrap())
+    }
+}
+
+/// https://en.wikipedia.org/wiki/Bencode
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Token {
+    IntegerBegin,
+    ListBegin,
+    DictBegin,
+    Length(i64),
+    End,
+    Colon,
+    EOF,
+}
+
+#[derive(Debug)]
+struct Lexer<'a, T>
+where
+    T: Iterator<Item = u8>,
+{
+    stream: &'a mut T,
+    position: i64,
+    cached_byte: Option<u8>,
+    cached_token: Option<Token>,
+}
+
+impl<'a, T> Lexer<'a, T>
+where
+    T: Iterator<Item = u8>,
+{
+    fn new(stream: &'a mut T) -> Lexer<'a, T> {
+        Lexer {
+            stream,
+            position: -1,
+            cached_byte: None,
+            cached_token: None,
+        }
+    }
+
+    fn next_byte(&mut self) -> Option<u8> {
+        self.position += 1;
+        match self.cached_byte {
+            Some(_) => self.cached_byte.take(),
+            None => self.stream.next(),
+        }
+    }
+
+    fn read_i64_before(&mut self, init: i64, symbol: u8) -> Result<(i64, i64)> {
+        let mut num = init;
+        let mut sign = 1i64;
+        let mut read = 0;
+
+        while let Some(x) = self.next_byte() {
+            read += 1;
+
+            match x {
+                b'0'..=b'9' => {
+                    if x == b'0' && sign == -1 && read == 2 {
+                        throw!("Negative zero is not permitted", self.position)
+                    }
+
+                    if num == 0 && ((sign == 1 && read != 1) || (sign == -1 && read != 2)) {
+                        throw!("Leading zero is not permitted", self.position)
+                    }
+
+                    num = num * 10 + (x - b'0') as i64
                 }
-                write!(f, "e")
+                b'-' => match sign {
+                    -1 if read != 1 => {
+                        throw!(
+                            "`-` can only appear in the head of the integer",
+                            self.position
+                        )
+                    }
+                    _ => sign = -1,
+                },
+                b if b == symbol => {
+                    self.cached_byte = Some(symbol);
+                    self.position -= 1;
+                    return Ok((sign * num, read - 1));
+                }
+                _ => throw!("invalid integer", self.position),
             }
-            BNode::Map(m) => {
-                write!(f, "d")?;
-                for n in m {
-                    let key = &n.0;
-                    let val = &n.1;
-                    write!(f, "{}:{}", key.len(), key)?;
-                    Display::fmt(val, f)?;
+        }
+
+        throw!("invalid integer", self.position)
+    }
+
+    fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>> {
+        let mut ret = Vec::with_capacity(len);
+
+        for _ in 0..len {
+            match self.next_byte() {
+                Some(byte) => ret.push(byte),
+                None => {
+                    throw!(
+                        format!(
+                            "bytes's length is expected to be {}, but it's {}.",
+                            len,
+                            ret.len()
+                        ),
+                        self.position
+                    );
                 }
-                write!(f, "e")
+            }
+        }
+
+        Ok(ret)
+    }
+
+    fn next_token(&mut self) -> Result<Token> {
+        if let Some(token) = self.cached_token.take() {
+            return Ok(token);
+        }
+
+        match self.next_byte() {
+            Some(unknown) => match unknown {
+                b'i' => Ok(Token::IntegerBegin),
+                b'l' => Ok(Token::ListBegin),
+                b'd' => Ok(Token::DictBegin),
+                b'e' => Ok(Token::End),
+                b'0'..=b'9' => {
+                    // Get the bytes length until it meets the colon
+                    // TODO handle overflow?
+                    let (length, _) = self.read_i64_before((unknown - b'0') as i64, b':')?;
+                    Ok(Token::Length(length))
+                }
+                b':' => Ok(Token::Colon),
+                _ => throw!(format!("unknown token: {}", unknown), self.position),
+            },
+            None => Ok(Token::EOF),
+        }
+    }
+
+    fn look_ahead(&mut self) -> Result<Token> {
+        if let Some(token) = &self.cached_token {
+            return Ok(*token);
+        }
+
+        let next_token = self.next_token()?;
+        self.cached_token = Some(next_token);
+
+        Ok(next_token)
+    }
+}
+
+pub struct Parser<'a, T>
+where
+    T: Iterator<Item = u8>,
+{
+    lexer: Lexer<'a, T>,
+}
+
+impl<'a, T> Parser<'a, T>
+where
+    T: Iterator<Item = u8>,
+{
+    pub fn new(stream: &'a mut T) -> Parser<'a, T> {
+        Parser {
+            lexer: Lexer::new(stream),
+        }
+    }
+
+    pub fn parse(&mut self) -> Result<BNode>
+    where
+        T: Iterator<Item = u8>,
+    {
+        let node = self.parse_node()?;
+
+        match self.lexer.next_token()? {
+            Token::EOF => Ok(node),
+            _ => throw!("Expect EOF", self.lexer.position),
+        }
+    }
+
+    fn parse_node(&mut self) -> Result<BNode>
+    where
+        T: Iterator<Item = u8>,
+    {
+        match self.lexer.look_ahead()? {
+            Token::IntegerBegin => Ok(self.parse_integer()?.into()),
+            Token::Length(_) => Ok(self.parse_bytes()?.into()),
+            Token::ListBegin => Ok(self.parse_list()?.into()),
+            Token::DictBegin => Ok(self.parse_dict()?.into()),
+            _ => throw!("invalid input", self.lexer.position),
+        }
+    }
+
+    fn parse_integer(&mut self) -> Result<i64>
+    where
+        T: Iterator<Item = u8>,
+    {
+        debug_assert_eq!(Token::IntegerBegin, self.lexer.next_token()?);
+
+        let (value, read) = self.lexer.read_i64_before(0, b'e')?;
+
+        if read < 1 {
+            throw!("Integer cannot be empty", self.lexer.position)
+        }
+
+        assert_eq!(Token::End, self.lexer.next_token()?);
+        Ok(value)
+    }
+
+    fn parse_bytes(&mut self) -> Result<Vec<u8>>
+    where
+        T: Iterator<Item = u8>,
+    {
+        let next_token = self.lexer.next_token()?;
+        match next_token {
+            Token::Length(len) => {
+                assert_eq!(Token::Colon, self.lexer.next_token()?);
+                Ok(self.lexer.read_bytes(len as usize)?)
+            }
+            _ => throw!("invalid input", self.lexer.position),
+        }
+    }
+
+    fn parse_list(&mut self) -> Result<BList>
+    where
+        T: Iterator<Item = u8>,
+    {
+        debug_assert_eq!(Token::ListBegin, self.lexer.next_token()?);
+        let mut list = vec![];
+
+        loop {
+            match self.lexer.look_ahead()? {
+                Token::IntegerBegin => {
+                    list.push(self.parse_integer()?.into());
+                }
+                Token::Length(_) => {
+                    list.push(self.parse_bytes()?.into());
+                }
+                Token::ListBegin => {
+                    list.push(self.parse_list()?.into());
+                }
+                Token::DictBegin => {
+                    list.push(self.parse_dict()?.into());
+                }
+                _ => {
+                    if self.lexer.next_token()? != Token::End {
+                        throw!("invalid list", self.lexer.position);
+                    }
+
+                    return Ok(list);
+                }
+            }
+        }
+    }
+
+    fn parse_dict(&mut self) -> Result<BDict>
+    where
+        T: Iterator<Item = u8>,
+    {
+        assert_eq!(Token::DictBegin, self.lexer.next_token()?);
+        let mut dict = BDict::new();
+        loop {
+            match self.lexer.look_ahead()? {
+                Token::Length(_) => {
+                    let key = String::from_utf8(self.parse_bytes()?).unwrap();
+                    let value = self.parse_node()?;
+                    dict.insert(key, value);
+                }
+                _ => {
+                    if self.lexer.next_token()? != Token::End {
+                        throw!("invalid dictionary", self.lexer.position)
+                    }
+
+                    return Ok(dict);
+                }
             }
         }
     }
 }
 
-fn raw_str_to_string(slice: &[u8]) -> String {
-    let mut s = String::new();
-    for x in slice {
-        s.push(*x as char);
-    }
-    s
-}
-
-#[inline]
-fn push_all(bytes: &[u8], buf: &mut Vec<u8>) {
-    for x in bytes {
-        buf.push(*x);
-    }
-}
-
-pub fn parse<T>(stream: &mut T) -> Result<BNode, String>
+pub fn parse<T>(stream: &mut T) -> Result<BNode>
 where
     T: Iterator<Item = u8>,
 {
-    if let Some(delimiter) = stream.next() {
-        let (node, _) = internal_parse(stream, delimiter, 0)?;
-        if let Some(_) = stream.next() {
-            return Err("Invalid stream".to_string());
-        }
-        return Ok(node);
-    }
-    Err("Invalid stream".to_string())
-}
-
-fn internal_parse<T>(
-    stream: &mut T,
-    delimiter: u8,
-    position: usize,
-) -> Result<(BNode, usize), String>
-where
-    T: Iterator<Item = u8>,
-{
-    match delimiter {
-        b'l' => parse_list(stream, position),
-        b'd' => parse_map(stream, position),
-        b'0'..=b'9' => parse_string(stream, (delimiter - b'0') as usize, position),
-        b'i' => parse_int(stream, position),
-        _ => Err(format!(
-            "Undefined delimiter: {}, position: #{}",
-            delimiter, position
-        )),
-    }
-}
-
-fn parse_int<T>(stream: &mut T, position: usize) -> Result<(BNode, usize), String>
-where
-    T: Iterator<Item = u8>,
-{
-    let mut val = 0i64;
-    let mut mul = 1;
-    let mut next = 1usize;
-    let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                match c {
-                    b'-' if next == 1 => {
-                        mul = -1;
-                    }
-                    b'e' if next != 1 => {
-                        return Ok((BNode::Int(val * mul), cur_position));
-                    }
-                    b'0'..=b'9' => val = val * 10 + (c - b'0') as i64,
-                    _ => {
-                        return Err(format!(
-                            "A number contains non-digit, position: #{}",
-                            cur_position
-                        ))
-                    }
-                }
-                next = next + 1;
-            }
-            None => break,
-        }
-    }
-
-    Err(format!(
-        "Missing ending 'e' for a number, position: #{}",
-        cur_position
-    ))
-}
-
-fn parse_string<T>(stream: &mut T, init: usize, position: usize) -> Result<(BNode, usize), String>
-where
-    T: Iterator<Item = u8>,
-{
-    let mut len: usize = init;
-    let mut matched = false;
-    let mut raw_str: Vec<u8> = vec![];
-    let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                if matched {
-                    if len > 0 {
-                        raw_str.push(c);
-                        len = len - 1;
-                    }
-                    if len == 0 {
-                        return Ok((BNode::Str(raw_str), cur_position));
-                    }
-                    continue;
-                }
-                match c {
-                    b':' => {
-                        matched = true;
-                        raw_str = Vec::with_capacity(len);
-                    }
-                    b'0'..=b'9' => len = len * 10 + (c - b'0') as usize,
-                    _ => {
-                        return Err(format!(
-                            "String's length contains non-digit, position: #{}",
-                            cur_position
-                        ))
-                    }
-                }
-            }
-            None => break,
-        }
-    }
-
-    Err("String's length is shorter than expected".to_string())
-}
-
-fn parse_list<T>(stream: &mut T, position: usize) -> Result<(BNode, usize), String>
-where
-    T: Iterator<Item = u8>,
-{
-    let mut nodes = vec![];
-    let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                if b'e' == c {
-                    return Ok((BNode::List(nodes), cur_position));
-                }
-                let (node, up_pos) = internal_parse(stream, c, cur_position)?;
-                cur_position = up_pos;
-
-                nodes.push(node);
-            }
-            None => break,
-        }
-    }
-
-    Err(format!("Missing 'e' at the end of list"))
-}
-
-fn parse_map<T>(stream: &mut T, position: usize) -> Result<(BNode, usize), String>
-where
-    T: Iterator<Item = u8>,
-{
-    let mut map = BMap::new();
-    let mut key_turn = true;
-    let mut key = vec![];
-    let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                if b'e' == c {
-                    return Ok((BNode::Map(map), cur_position));
-                }
-                if key_turn {
-                    let (key_node, up_pos) = internal_parse(stream, c, cur_position)?;
-                    let raw_key = match key_node {
-                        BNode::Str(s) => s,
-                        _ => {
-                            return Err(format!(
-                                "Dictionary key's type should be String, position: #{}",
-                                cur_position
-                            ))
-                        }
-                    };
-                    cur_position = up_pos;
-
-                    key.push(raw_str_to_string(&raw_key));
-                } else {
-                    let (val_node, up_pos) = internal_parse(stream, c, cur_position)?;
-                    cur_position = up_pos;
-
-                    map.insert(key.pop().unwrap(), val_node);
-                }
-                key_turn = !key_turn;
-            }
-            None => break,
-        }
-    }
-
-    if !key_turn {
-        return Err("A dictionary key lacks a corresponding value".to_string());
-    }
-
-    Err(format!(
-        "Missing 'e' at the end of map, position: {}",
-        cur_position
-    ))
+    let mut parser = Parser::new(stream);
+    parser.parse()
 }
 
 #[cfg(test)]
 mod tests {
-    fn str_to_raw(s: &str) -> Vec<u8> {
-        let mut v = vec![];
-        for x in s.bytes() {
-            v.push(x);
+    use super::{BNode, Lexer, Parser, Token};
+
+    #[test]
+    fn test_lexer_read_i64_before() {
+        let raws = ["2147483648e", "0e"];
+        let ret = [2147483648, 0];
+
+        for i in 0..raws.len() {
+            let raw = raws[i];
+            let mut bytes = raw.bytes();
+            let mut lexer = Lexer::new(&mut bytes);
+
+            let (value, _) = lexer.read_i64_before(0, b'e').unwrap();
+            assert_eq!(ret[i], value);
         }
-
-        v
     }
 
     #[test]
-    fn test_bint_display() {
-        let bi32 = crate::BNode::Int(32);
-        assert_eq!(&format!("{}", bi32), "i32e");
+    fn test_lexer_read_negative_zero() {
+        let raw = "-0e";
 
-        let neg_bi32 = crate::BNode::Int(-32);
-        assert_eq!(&format!("{}", neg_bi32), "i-32e");
+        let mut bytes = raw.bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        let _ = lexer
+            .read_i64_before(0, b'e')
+            .expect_err("Negative zero is not permitted");
     }
 
     #[test]
-    fn test_string_display() {
-        let bstr = crate::BNode::Str(str_to_raw("str"));
-        assert_eq!(&format!("{}", bstr), "3:str");
+    fn test_lexer_no_leading_zero() {
+        let raws = ["00e", "01e"];
+
+        for raw in raws.iter() {
+            let mut bytes = raw.bytes();
+            let mut lexer = Lexer::new(&mut bytes);
+
+            let _ = lexer
+                .read_i64_before(0, b'e')
+                .expect_err("Leading zero is not permitted");
+        }
     }
 
     #[test]
-    fn test_primitive_int() {
-        let cases = vec!["i2147483648e", "i-253e"];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(bint) => {
-                    if let crate::BNode::Int(i) = bint {
-                        assert_eq!(i, x[1..x.len() - 1].parse::<i64>().unwrap());
-                    }
-                }
-                Err(e) => panic!(e),
+    fn test_lexer_read_bytes() {
+        let mut bytes = "bencode".bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        let raw_bytes = lexer.read_bytes(3).unwrap();
+        assert_eq!("ben".as_bytes(), &raw_bytes);
+
+        let raw_bytes = lexer.read_bytes(4).unwrap();
+        assert_eq!("code".as_bytes(), &raw_bytes);
+    }
+
+    #[test]
+    fn test_lexer_position_read_bytes() {
+        let mut bytes = "bencode".bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        let _ = lexer.read_bytes(3).unwrap();
+        assert_eq!(2, lexer.position);
+
+        let _ = lexer.read_bytes(4).unwrap();
+        assert_eq!(6, lexer.position);
+    }
+
+    #[test]
+    fn test_lexer_position_cache_token() {
+        let mut bytes = "i56e".bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        let _ = lexer.look_ahead().unwrap();
+        assert_eq!(0, lexer.position);
+
+        let _ = lexer.look_ahead().unwrap();
+        assert_eq!(0, lexer.position);
+    }
+
+    #[test]
+    fn test_lexer_position_read_i64_before() {
+        let mut bytes = "7:bencode".bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        lexer.read_i64_before(0, b':').unwrap();
+        assert_eq!(0, lexer.position);
+        lexer.read_bytes(1).unwrap();
+        assert_eq!(1, lexer.position);
+    }
+
+    #[test]
+    fn test_lexer_position_error() {
+        let mut bytes = "i-2-0e".bytes();
+        let mut parser = Parser::new(&mut bytes);
+
+        assert_eq!(3, parser.parse_integer().unwrap_err().position)
+    }
+
+    #[test]
+    fn test_lexer_look_ahead() {
+        let mut bytes = "i256e".bytes();
+        let mut lexer = Lexer::new(&mut bytes);
+
+        assert_eq!(Token::IntegerBegin, lexer.look_ahead().unwrap());
+        assert_eq!(Token::IntegerBegin, lexer.look_ahead().unwrap());
+    }
+
+    #[test]
+    fn test_parse_integer() {
+        let raw = ["i256e", "i-1024e"];
+        let expected = [256, -1024];
+        for (raw, expected) in raw.iter().zip(expected) {
+            let mut bytes = raw.bytes();
+            let mut parser = Parser::new(&mut bytes);
+
+            let value = parser.parse_integer().unwrap();
+            assert_eq!(expected, value);
+        }
+    }
+
+    #[test]
+    fn test_parse_integer_failed() {
+        let cases = ["i2522", "ie", "i", "i-12-3e", "i13ee"];
+        for (i, _) in cases.iter().enumerate() {
+            let x = cases[i];
+            let mut bytes = x.bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
+                panic!("{}-th should fail", i);
             }
         }
     }
 
     #[test]
-    fn test_primitive_int_failed() {
-        let cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
+    fn test_parse_bytes() {
+        let mut bytes = "7:bencode".bytes();
+        let mut parser = Parser::new(&mut bytes);
+
+        let bytes = parser.parse_bytes().unwrap();
+        assert_eq!("bencode".as_bytes(), &bytes);
+    }
+
+    #[test]
+    fn test_parse_bytes_failed() {
+        let cases = ["5:hello2", "5:halo", "521"];
+        for (i, _) in cases.iter().enumerate() {
+            let mut bytes = cases[i].bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
+                panic!("{}-th should fail", i);
             }
         }
     }
 
     #[test]
-    fn test_primitive_string() {
-        use crate::BNode;
-        let cases = vec!["4:halo"];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
+    fn test_parse_list() {
+        let cases = ["li256e7:bencodeli256e7:bencodeee", "l4:spami42ee", "le"];
+        for (i, _) in cases.iter().enumerate() {
+            let mut bytes = cases[i].bytes();
+            let mut parser = Parser::new(&mut bytes);
+            match parser.parse() {
                 Ok(node) => {
-                    if let BNode::Str(v) = node {
-                        let index = x.find(':').unwrap();
-                        assert_eq!(&x[index + 1..], &crate::raw_str_to_string(&v));
-                    }
+                    let mut buf = vec![];
+                    let _ = node.serialize(&mut buf);
+                    assert_eq!(cases[i].as_bytes(), &buf)
                 }
-                Err(e) => panic!(e),
+                Err(e) => std::panic::panic_any(e),
             }
         }
     }
 
     #[test]
-    fn test_primitive_string_failed() {
-        let cases = vec!["5:hello2", "5:halo", "521"];
+    fn test_parse_list_failed() {
+        let cases = ["l4:halo"];
+        for (i, _) in cases.iter().enumerate() {
+            let mut bytes = cases[i].bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
+                panic!("{}-th should fail", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_list() {
+        let raw = "ll5:helloe4:spami42ee";
+        let mut bytes = raw.bytes();
+        let mut parser = Parser::new(&mut bytes);
+        let bnode = parser.parse().unwrap();
+
+        let mut buf = vec![];
+        let _ = bnode.serialize(&mut buf).unwrap();
+
+        assert_eq!(raw.as_bytes(), &buf);
+    }
+
+    #[test]
+    fn test_parse_dict() {
+        let raw = "d3:bar4:spam3:fooi42ee";
+
+        let mut bytes = raw.bytes();
+        let mut parser = Parser::new(&mut bytes);
+
+        let dict = parser.parse_dict().unwrap();
+        assert_eq!(2, dict.len());
+
+        match dict.get("bar").unwrap() {
+            BNode::Bytes(bytes) => {
+                assert_eq!(&bytes, &"spam".as_bytes());
+            }
+            _ => panic!("`bar` should have the value `spam`"),
+        }
+
+        match dict.get("foo").unwrap() {
+            BNode::Integer(iv) => {
+                assert_eq!(&42, iv);
+            }
+            _ => panic!("`foo` should have the value `42`"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dict_failed() {
+        let cases = ["d4:haloi23e", "di23e4:haloe"];
         for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
+            let mut bytes = x.bytes();
+            let mut parser = Parser::new(&mut bytes);
+            if parser.parse().is_ok() {
+                panic!("Should fail");
             }
         }
     }
 
     #[test]
-    fn test_list() {
-        let cases = vec!["l4:spami42ee", "le"];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(node) => assert_eq!(x, &format!("{}", node)),
-                Err(e) => panic!(e),
-            }
-        }
-    }
+    fn test_parse_nested_dict() {
+        let raw = r#"d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:"Debian CD from cdimage.debian.org"13:creation datei1573903810e9:httpseedsl145:https://cdimage.debian.org/cdimage/release/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.iso145:https://cdimage.debian.org/cdimage/archive/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.isoe4:infod6:lengthi351272960e4:name31:debian-10.2.0-amd64-netinst.iso12:piece lengthi262144eee"#;
 
-    #[test]
-    fn test_list_failed() {
-        let cases = vec!["l4:halo"];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
-            }
-        }
-    }
+        let mut bytes = raw.bytes();
+        let mut parser = Parser::new(&mut bytes);
+        let bnode = parser.parse().unwrap();
 
-    #[test]
-    fn test_nested_list() {
-        let cases = vec!["ll5:helloe4:spami42ee"];
+        let mut buf = Vec::with_capacity(bytes.len());
+        let _ = bnode.serialize(&mut buf);
 
-        for x in cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(node) => {
-                    println!("{}-{}", &x, node);
-                    assert_eq!(&format!("{}", node), &x);
-                }
-                Err(e) => panic!(e),
-            }
-        }
-    }
-
-    #[test]
-    fn test_map() {
-        let cases = vec![
-            "d8:announce41:http://bttracker.debian.org:6969/announce13:creation datei15739038104ee",
-        ];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(node) => {
-                    assert_eq!(x, &format!("{}", node));
-                }
-                Err(e) => panic!(e),
-            }
-        }
-    }
-
-    #[test]
-    fn test_map_failed() {
-        let cases = vec!["d4:haloi23e", "di23e4:haloe"];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
-            }
-        }
-    }
-
-    #[test]
-    fn test_nested_map() {
-        let cases = vec![
-            r#"d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:"Debian CD from cdimage.debian.org"13:creation datei1573903810e9:httpseedsl145:https://cdimage.debian.org/cdimage/release/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.iso145:https://cdimage.debian.org/cdimage/archive/10.2.0//srv/cdbuilder.debian.org/dst/deb-cd/weekly-builds/amd64/iso-cd/debian-10.2.0-amd64-netinst.isoe4:infod6:lengthi351272960e4:name31:debian-10.2.0-amd64-netinst.iso12:piece lengthi262144eee"#,
-        ];
-        for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(node) => {
-                    assert_eq!(x, &format!("{}", node));
-                }
-                Err(e) => panic!(e),
-            }
-        }
+        assert_eq!(&raw.as_bytes(), &buf);
     }
 }

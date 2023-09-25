@@ -1,8 +1,8 @@
 [package]
 name = "bencodex"
-version = "0.1.3"
+version = "0.2.0"
 authors = ["nomyfan <Nomyfan@live.com>"]
-edition = "2018"
+edition = "2021"
 description = "bencode parser"
 homepage = "https://github.com/Nomyfan/bencodex"
 repository = "https://github.com/Nomyfan/bencodex"
@@ -13,3 +13,23 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+
+[lib]
+path = "src/lib.rs"
+name = "bencodex"
+
+[[bin]]
+name = "example_ser"
+path = "examples/ser/main.rs"
+
+[[bin]]
+name = "example_de"
+path = "examples/de/main.rs"
+
+[[bin]]
+name = "example_bufreader"
+path = "examples/bufreader/main.rs"
+
+[[bin]]
+name = "example_bufwriter"
+path = "examples/bufwriter/main.rs"
