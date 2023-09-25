@@ -1,6 +1,6 @@
 #![allow(semicolon_in_expressions_from_macros)]
 
-use std::{fmt::Display, io::Write};
+use std::{collections::LinkedList, fmt::Display, io::Write};
 pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
 
@@ -134,7 +134,7 @@ where
     cached_byte: Option<u8>,
     cached_token: Option<Token>,
 
-    token_stack: Vec<Token>,
+    token_stack: LinkedList<Token>,
     current_token: Option<Token>,
 }
 
@@ -149,7 +149,7 @@ where
             cached_byte: None,
             cached_token: None,
 
-            token_stack: vec![],
+            token_stack: LinkedList::new(),
             current_token: None,
         }
     }
@@ -234,23 +234,23 @@ where
             Some(unknown) => match unknown {
                 b'i' => {
                     self.current_token = Some(Token::IntegerBegin);
-                    self.token_stack.push(Token::IntegerBegin);
+                    self.token_stack.push_back(Token::IntegerBegin);
 
                     Ok(Token::IntegerBegin)
                 }
                 b'l' => {
                     self.current_token = Some(Token::ListBegin);
-                    self.token_stack.push(Token::ListBegin);
+                    self.token_stack.push_back(Token::ListBegin);
 
                     Ok(Token::ListBegin)
                 }
                 b'd' => {
                     self.current_token = Some(Token::DictBegin);
-                    self.token_stack.push(Token::DictBegin);
+                    self.token_stack.push_back(Token::DictBegin);
 
                     Ok(Token::DictBegin)
                 }
-                b'e' => match &self.token_stack.pop() {
+                b'e' => match &self.token_stack.pop_back() {
                     Some(Token::IntegerBegin) => {
                         self.current_token = None;
 
