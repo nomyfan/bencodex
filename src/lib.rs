@@ -101,11 +101,8 @@ impl Display for BNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         let mut buf = vec![];
 
-        // TODO: return error
         self.marshal(&mut buf).unwrap();
-        write!(f, "{}", std::str::from_utf8(&buf).unwrap()).unwrap();
-
-        Ok(())
+        write!(f, "{}", std::str::from_utf8(&buf).unwrap())
     }
 }
 
