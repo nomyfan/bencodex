@@ -127,7 +127,7 @@ where
 {
     if let Some(delimiter) = stream.next() {
         let (node, _) = internal_parse(stream, delimiter, 0)?;
-        if let Some(_) = stream.next() {
+        if stream.next().is_some() {
             return Err("Invalid stream".to_string());
         }
         return Ok(node);
@@ -163,29 +163,24 @@ where
     let mut mul = 1;
     let mut next = 1usize;
     let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                match c {
-                    b'-' if next == 1 => {
-                        mul = -1;
-                    }
-                    b'e' if next != 1 => {
-                        return Ok((BNode::Int(val * mul), cur_position));
-                    }
-                    b'0'..=b'9' => val = val * 10 + (c - b'0') as i64,
-                    _ => {
-                        return Err(format!(
-                            "A number contains non-digit, position: #{}",
-                            cur_position
-                        ))
-                    }
-                }
-                next = next + 1;
+    for c in stream {
+        cur_position += 1;
+        match c {
+            b'-' if next == 1 => {
+                mul = -1;
             }
-            None => break,
+            b'e' if next != 1 => {
+                return Ok((BNode::Int(val * mul), cur_position));
+            }
+            b'0'..=b'9' => val = val * 10 + (c - b'0') as i64,
+            _ => {
+                return Err(format!(
+                    "A number contains non-digit, position: #{}",
+                    cur_position
+                ))
+            }
         }
+        next += 1;
     }
 
     Err(format!(
@@ -202,35 +197,30 @@ where
     let mut matched = false;
     let mut raw_str: Vec<u8> = vec![];
     let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                if matched {
-                    if len > 0 {
-                        raw_str.push(c);
-                        len = len - 1;
-                    }
-                    if len == 0 {
-                        return Ok((BNode::Str(raw_str), cur_position));
-                    }
-                    continue;
-                }
-                match c {
-                    b':' => {
-                        matched = true;
-                        raw_str = Vec::with_capacity(len);
-                    }
-                    b'0'..=b'9' => len = len * 10 + (c - b'0') as usize,
-                    _ => {
-                        return Err(format!(
-                            "String's length contains non-digit, position: #{}",
-                            cur_position
-                        ))
-                    }
-                }
+    for c in stream {
+        cur_position += 1;
+        if matched {
+            if len > 0 {
+                raw_str.push(c);
+                len -= 1;
             }
-            None => break,
+            if len == 0 {
+                return Ok((BNode::Str(raw_str), cur_position));
+            }
+            continue;
+        }
+        match c {
+            b':' => {
+                matched = true;
+                raw_str = Vec::with_capacity(len);
+            }
+            b'0'..=b'9' => len = len * 10 + (c - b'0') as usize,
+            _ => {
+                return Err(format!(
+                    "String's length contains non-digit, position: #{}",
+                    cur_position
+                ))
+            }
         }
     }
 
@@ -243,23 +233,18 @@ where
 {
     let mut nodes = vec![];
     let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                if b'e' == c {
-                    return Ok((BNode::List(nodes), cur_position));
-                }
-                let (node, up_pos) = internal_parse(stream, c, cur_position)?;
-                cur_position = up_pos;
-
-                nodes.push(node);
-            }
-            None => break,
+    while let Some(c) = stream.next() {
+        cur_position += 1;
+        if b'e' == c {
+            return Ok((BNode::List(nodes), cur_position));
         }
+        let (node, up_pos) = internal_parse(stream, c, cur_position)?;
+        cur_position = up_pos;
+
+        nodes.push(node);
     }
 
-    Err(format!("Missing 'e' at the end of list"))
+    Err("Missing 'e' at the end of list".to_string())
 }
 
 fn parse_map<T>(stream: &mut T, position: usize) -> Result<(BNode, usize), String>
@@ -270,37 +255,32 @@ where
     let mut key_turn = true;
     let mut key = vec![];
     let mut cur_position = position;
-    loop {
-        match stream.next() {
-            Some(c) => {
-                cur_position += 1;
-                if b'e' == c {
-                    return Ok((BNode::Map(map), cur_position));
-                }
-                if key_turn {
-                    let (key_node, up_pos) = internal_parse(stream, c, cur_position)?;
-                    let raw_key = match key_node {
-                        BNode::Str(s) => s,
-                        _ => {
-                            return Err(format!(
-                                "Dictionary key's type should be String, position: #{}",
-                                cur_position
-                            ))
-                        }
-                    };
-                    cur_position = up_pos;
-
-                    key.push(raw_str_to_string(&raw_key));
-                } else {
-                    let (val_node, up_pos) = internal_parse(stream, c, cur_position)?;
-                    cur_position = up_pos;
-
-                    map.insert(key.pop().unwrap(), val_node);
-                }
-                key_turn = !key_turn;
-            }
-            None => break,
+    while let Some(c) = stream.next() {
+        cur_position += 1;
+        if b'e' == c {
+            return Ok((BNode::Map(map), cur_position));
         }
+        if key_turn {
+            let (key_node, up_pos) = internal_parse(stream, c, cur_position)?;
+            let raw_key = match key_node {
+                BNode::Str(s) => s,
+                _ => {
+                    return Err(format!(
+                        "Dictionary key's type should be String, position: #{}",
+                        cur_position
+                    ))
+                }
+            };
+            cur_position = up_pos;
+
+            key.push(raw_str_to_string(&raw_key));
+        } else {
+            let (val_node, up_pos) = internal_parse(stream, c, cur_position)?;
+            cur_position = up_pos;
+
+            map.insert(key.pop().unwrap(), val_node);
+        }
+        key_turn = !key_turn;
     }
 
     if !key_turn {
@@ -358,9 +338,8 @@ mod tests {
     fn test_primitive_int_failed() {
         let cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
         for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
+            if crate::parse(&mut x.bytes()).is_ok() {
+                panic!("Should fail")
             }
         }
     }
@@ -386,9 +365,8 @@ mod tests {
     fn test_primitive_string_failed() {
         let cases = vec!["5:hello2", "5:halo", "521"];
         for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
+            if crate::parse(&mut x.bytes()).is_ok() {
+                panic!("Should fail")
             }
         }
     }
@@ -408,9 +386,8 @@ mod tests {
     fn test_list_failed() {
         let cases = vec!["l4:halo"];
         for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
+            if crate::parse(&mut x.bytes()).is_ok() {
+                panic!("Should fail")
             }
         }
     }
@@ -449,9 +426,8 @@ mod tests {
     fn test_map_failed() {
         let cases = vec!["d4:haloi23e", "di23e4:haloe"];
         for x in &cases {
-            match crate::parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
+            if crate::parse(&mut x.bytes()).is_ok() {
+                panic!("Should fail")
             }
         }
     }

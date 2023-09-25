@@ -1,3 +1,4 @@
+#![allow(semicolon_in_expressions_from_macros)]
 pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
 
@@ -7,29 +8,20 @@ pub struct Error {
     pub msg: String,
 }
 
-impl Error {
-    fn new<T>(msg: T, position: i64) -> Error
-    where
-        T: Into<String>,
-    {
-        Error {
-            msg: msg.into(),
-            position,
-        }
-    }
-}
-
 macro_rules! throw {
     ($msg:expr, $pos:expr) => {
-        return Err(Error::new($msg, $pos));
+        return Err(Error {
+            msg: $msg.into(),
+            position: $pos,
+        });
     };
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub enum BNode {
-    Number(i64),
-    Stream(Vec<u8>),
+    Int(i64),
+    Bytes(Vec<u8>),
     List(BList),
     Dict(BDict),
 }
@@ -37,15 +29,15 @@ pub enum BNode {
 impl BNode {
     pub fn marshal(&self, buf: &mut Vec<u8>) {
         match self {
-            BNode::Number(i) => {
+            BNode::Int(i) => {
                 buf.push(b'i');
-                push_all(i.to_string().as_bytes(), buf);
+                buf.extend(i.to_string().as_bytes());
                 buf.push(b'e');
             }
-            BNode::Stream(s) => {
-                push_all(s.len().to_string().as_bytes(), buf);
+            BNode::Bytes(s) => {
+                buf.extend(s.len().to_string().as_bytes());
                 buf.push(b':');
-                push_all(s, buf);
+                buf.extend(s);
             }
             BNode::List(l) => {
                 buf.push(b'l');
@@ -57,9 +49,9 @@ impl BNode {
             BNode::Dict(m) => {
                 buf.push(b'd');
                 for (k, v) in m {
-                    push_all(k.len().to_string().as_bytes(), buf);
+                    buf.extend(k.len().to_string().as_bytes());
                     buf.push(b':');
-                    push_all(k.as_bytes(), buf);
+                    buf.extend(k.as_bytes());
                     v.marshal(buf);
                 }
                 buf.push(b'e');
@@ -68,23 +60,15 @@ impl BNode {
     }
 }
 
-#[inline]
-fn push_all(bytes: &[u8], buf: &mut Vec<u8>) {
-    for x in bytes {
-        buf.push(*x);
-    }
-}
-
-/**
-https://en.wikipedia.org/wiki/Bencode
-*/
+/// https://en.wikipedia.org/wiki/Bencode
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Token {
-    NumberStart,
-    NumberEnd,
-    ListStart,
+    IntBegin,
+    IntEnd,
+    ListBegin,
     ListEnd,
-    DictStart,
+    DictBegin,
     DictEnd,
     Length(i64),
     Colon,
@@ -122,15 +106,13 @@ where
     }
 
     fn next_byte(&mut self) -> Option<u8> {
-        let next = match self.cached_byte {
+        match self.cached_byte {
             Some(_) => self.cached_byte.take(),
             None => {
                 self.position += 1;
                 self.stream.next()
             }
-        };
-
-        next
+        }
     }
 
     fn read_i64_before(&mut self, init: i64, symbol: u8) -> Result<(i64, i64)> {
@@ -138,8 +120,7 @@ where
         let mut sign = 1i64;
         let mut read = 0;
 
-        let mut meet = self.next_byte();
-        while let Some(x) = meet {
+        while let Some(x) = self.next_byte() {
             read += 1;
 
             match x {
@@ -169,14 +150,12 @@ where
                 }
                 _ => throw!("invalid number", self.position),
             }
-
-            meet = self.next_byte();
         }
 
         throw!("invalid number", self.position)
     }
 
-    fn read_nbytes(&mut self, len: usize) -> Result<Vec<u8>> {
+    fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>> {
         let mut ret = Vec::with_capacity(len);
 
         for _ in 0..len {
@@ -206,35 +185,35 @@ where
         match self.next_byte() {
             Some(unknown) => match unknown {
                 b'i' => {
-                    self.current_token = Some(Token::NumberStart);
-                    self.token_stack.push(Token::NumberStart);
+                    self.current_token = Some(Token::IntBegin);
+                    self.token_stack.push(Token::IntBegin);
 
-                    Ok(Token::NumberStart)
+                    Ok(Token::IntBegin)
                 }
                 b'l' => {
-                    self.current_token = Some(Token::ListStart);
-                    self.token_stack.push(Token::ListStart);
+                    self.current_token = Some(Token::ListBegin);
+                    self.token_stack.push(Token::ListBegin);
 
-                    Ok(Token::ListStart)
+                    Ok(Token::ListBegin)
                 }
                 b'd' => {
-                    self.current_token = Some(Token::DictStart);
-                    self.token_stack.push(Token::DictStart);
+                    self.current_token = Some(Token::DictBegin);
+                    self.token_stack.push(Token::DictBegin);
 
-                    Ok(Token::DictStart)
+                    Ok(Token::DictBegin)
                 }
                 b'e' => match &self.token_stack.pop() {
-                    Some(Token::NumberStart) => {
+                    Some(Token::IntBegin) => {
                         self.current_token = None;
 
-                        Ok(Token::NumberEnd)
+                        Ok(Token::IntEnd)
                     }
-                    Some(Token::ListStart) => {
+                    Some(Token::ListBegin) => {
                         self.current_token = None;
 
                         Ok(Token::ListEnd)
                     }
-                    Some(Token::DictStart) => {
+                    Some(Token::DictBegin) => {
                         self.current_token = None;
 
                         Ok(Token::DictEnd)
@@ -270,7 +249,7 @@ where
 
     fn look_ahead(&mut self) -> Result<Token> {
         if let Some(token) = &self.cached_token {
-            return Ok(token.clone());
+            return Ok(*token);
         }
 
         let next_token = self.next_token()?;
@@ -292,27 +271,27 @@ where
     }
 }
 
-fn parse_internal<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(BNode, Lexer<'a, T>)>
+fn parse_internal<T>(mut lexer: Lexer<'_, T>) -> Result<(BNode, Lexer<'_, T>)>
 where
     T: Iterator<Item = u8>,
 {
     match lexer.look_ahead()? {
-        Token::NumberStart => {
+        Token::IntBegin => {
             let (number, _lexer) = parse_number(lexer)?;
 
-            Ok((BNode::Number(number), _lexer))
+            Ok((BNode::Int(number), _lexer))
         }
         Token::Length(_) => {
             let (stream, _lexer) = parse_stream(lexer)?;
 
-            Ok((BNode::Stream(stream), _lexer))
+            Ok((BNode::Bytes(stream), _lexer))
         }
-        Token::ListStart => {
+        Token::ListBegin => {
             let (list, _lexer) = parse_list(lexer)?;
 
             Ok((BNode::List(list), _lexer))
         }
-        Token::DictStart => {
+        Token::DictBegin => {
             let (dict, _lexer) = parse_dict(lexer)?;
 
             Ok((BNode::Dict(dict), _lexer))
@@ -321,11 +300,11 @@ where
     }
 }
 
-fn parse_number<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(i64, Lexer<'a, T>)>
+fn parse_number<T>(mut lexer: Lexer<'_, T>) -> Result<(i64, Lexer<'_, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    assert_eq!(Token::NumberStart, lexer.next_token()?);
+    assert_eq!(Token::IntBegin, lexer.next_token()?);
 
     let (value, read) = lexer.read_i64_before(0, b'e')?;
 
@@ -333,12 +312,12 @@ where
         throw!("Number cannot be empty", lexer.position)
     }
 
-    assert_eq!(Token::NumberEnd, lexer.next_token()?);
+    assert_eq!(Token::IntEnd, lexer.next_token()?);
 
     Ok((value, lexer))
 }
 
-fn parse_stream<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(Vec<u8>, Lexer<'a, T>)>
+fn parse_stream<T>(mut lexer: Lexer<'_, T>) -> Result<(Vec<u8>, Lexer<'_, T>)>
 where
     T: Iterator<Item = u8>,
 {
@@ -346,7 +325,7 @@ where
     match next_token {
         Token::Length(len) => {
             assert_eq!(Token::Colon, lexer.next_token()?);
-            let stream = lexer.read_nbytes(len as usize)?;
+            let stream = lexer.read_bytes(len as usize)?;
 
             Ok((stream, lexer))
         }
@@ -354,34 +333,34 @@ where
     }
 }
 
-fn parse_list<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(BList, Lexer<'a, T>)>
+fn parse_list<T>(mut lexer: Lexer<'_, T>) -> Result<(BList, Lexer<'_, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    assert_eq!(Token::ListStart, lexer.next_token()?);
+    assert_eq!(Token::ListBegin, lexer.next_token()?);
     let mut list = vec![];
 
     loop {
         match lexer.look_ahead()? {
-            Token::NumberStart => {
+            Token::IntBegin => {
                 let (number, _lexer) = parse_number(lexer)?;
-                list.push(BNode::Number(number));
+                list.push(BNode::Int(number));
 
                 lexer = _lexer;
             }
             Token::Length(_) => {
                 let (stream, _lexer) = parse_stream(lexer)?;
-                list.push(BNode::Stream(stream));
+                list.push(BNode::Bytes(stream));
 
                 lexer = _lexer;
             }
-            Token::ListStart => {
+            Token::ListBegin => {
                 let (_list, _lexer) = parse_list(lexer)?;
                 list.push(BNode::List(_list));
 
                 lexer = _lexer;
             }
-            Token::DictStart => {
+            Token::DictBegin => {
                 let (dict, _lexer) = parse_dict(lexer)?;
                 list.push(BNode::Dict(dict));
 
@@ -398,11 +377,11 @@ where
     }
 }
 
-fn parse_dict<'a, T>(mut lexer: Lexer<'a, T>) -> Result<(BDict, Lexer<'a, T>)>
+fn parse_dict<T>(mut lexer: Lexer<'_, T>) -> Result<(BDict, Lexer<'_, T>)>
 where
     T: Iterator<Item = u8>,
 {
-    assert_eq!(Token::DictStart, lexer.next_token()?);
+    assert_eq!(Token::DictBegin, lexer.next_token()?);
     let mut dict = BDict::new();
     loop {
         match lexer.look_ahead()? {
@@ -476,10 +455,10 @@ mod tests {
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        let raw_bytes = lexer.read_nbytes(3).unwrap();
+        let raw_bytes = lexer.read_bytes(3).unwrap();
         assert_eq!("ben".as_bytes(), &raw_bytes);
 
-        let raw_bytes = lexer.read_nbytes(4).unwrap();
+        let raw_bytes = lexer.read_bytes(4).unwrap();
         assert_eq!("code".as_bytes(), &raw_bytes);
     }
 
@@ -490,10 +469,10 @@ mod tests {
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        let _ = lexer.read_nbytes(3).unwrap();
+        let _ = lexer.read_bytes(3).unwrap();
         assert_eq!(2, lexer.position);
 
-        let _ = lexer.read_nbytes(4).unwrap();
+        let _ = lexer.read_bytes(4).unwrap();
         assert_eq!(6, lexer.position);
     }
 
@@ -539,8 +518,8 @@ mod tests {
         let mut bytes = raw.bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        assert_eq!(Token::NumberStart, lexer.look_ahead().unwrap());
-        assert_eq!(Token::NumberStart, lexer.look_ahead().unwrap());
+        assert_eq!(Token::IntBegin, lexer.look_ahead().unwrap());
+        assert_eq!(Token::IntBegin, lexer.look_ahead().unwrap());
     }
 
     #[test]
@@ -562,13 +541,11 @@ mod tests {
 
     #[test]
     fn test_parse_number_failed() {
-        let cases = vec!["i2522", "ie", "i", "i-12-3e", "i13ee"];
-        let len = cases.len();
-        for i in 0..len {
+        let cases = ["i2522", "ie", "i", "i-12-3e", "i13ee"];
+        for (i, _) in cases.iter().enumerate() {
             let x = cases[i];
-            match parse(&mut x.bytes()) {
-                Ok(_) => panic!("{}-th should fail", i),
-                Err(_) => (),
+            if parse(&mut x.bytes()).is_ok() {
+                panic!("{}-th should fail", i);
             }
         }
     }
@@ -586,22 +563,19 @@ mod tests {
 
     #[test]
     fn test_parse_stream_failed() {
-        let cases = vec!["5:hello2", "5:halo", "521"];
-        let len = cases.len();
-        for i in 0..len {
+        let cases = ["5:hello2", "5:halo", "521"];
+        for (i, _) in cases.iter().enumerate() {
             let x = cases[i];
-            match parse(&mut x.bytes()) {
-                Ok(_) => panic!("{}-th should fail", i),
-                Err(_) => (),
+            if parse(&mut x.bytes()).is_ok() {
+                panic!("{}-th should fail", i);
             }
         }
     }
 
     #[test]
     fn test_parse_list() {
-        let cases = vec!["li256e7:bencodeli256e7:bencodeee", "l4:spami42ee", "le"];
-        let len = cases.len();
-        for i in 0..len {
+        let cases = ["li256e7:bencodeli256e7:bencodeee", "l4:spami42ee", "le"];
+        for (i, _) in cases.iter().enumerate() {
             let x = cases[i];
             match parse(&mut x.bytes()) {
                 Ok(node) => {
@@ -616,13 +590,11 @@ mod tests {
 
     #[test]
     fn test_parse_list_failed() {
-        let cases = vec!["l4:halo"];
-        let len = cases.len();
-        for i in 0..len {
+        let cases = ["l4:halo"];
+        for (i, _) in cases.iter().enumerate() {
             let x = cases[i];
-            match parse(&mut x.bytes()) {
-                Ok(_) => panic!("{}-th should fail", i),
-                Err(_) => (),
+            if parse(&mut x.bytes()).is_ok() {
+                panic!("{}-th should fail", i);
             }
         }
     }
@@ -651,14 +623,14 @@ mod tests {
         assert_eq!(2, dict.len());
 
         match dict.get("bar").unwrap() {
-            BNode::Stream(stream) => {
+            BNode::Bytes(stream) => {
                 assert_eq!(&stream, &"spam".as_bytes());
             }
             _ => panic!("`bar` should have the value `spam`"),
         }
 
         match dict.get("foo").unwrap() {
-            BNode::Number(iv) => {
+            BNode::Int(iv) => {
                 assert_eq!(&42, iv);
             }
             _ => panic!("`foo` should have the value `42`"),
@@ -667,11 +639,10 @@ mod tests {
 
     #[test]
     fn test_parse_dict_failed() {
-        let cases = vec!["d4:haloi23e", "di23e4:haloe"];
+        let cases = ["d4:haloi23e", "di23e4:haloe"];
         for x in &cases {
-            match parse(&mut x.bytes()) {
-                Ok(_) => panic!("Should fail"),
-                Err(_) => (),
+            if parse(&mut x.bytes()).is_ok() {
+                panic!("Should fail");
             }
         }
     }
