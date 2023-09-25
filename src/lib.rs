@@ -155,12 +155,10 @@ where
     }
 
     fn next_byte(&mut self) -> Option<u8> {
+        self.position += 1;
         match self.cached_byte {
             Some(_) => self.cached_byte.take(),
-            None => {
-                self.position += 1;
-                self.stream.next()
-            }
+            None => self.stream.next(),
         }
     }
 
@@ -195,6 +193,7 @@ where
                 },
                 b if b == symbol => {
                     self.cached_byte = Some(symbol);
+                    self.position -= 1;
                     return Ok((sign * num, read - 1));
                 }
                 _ => throw!("invalid integer", self.position),
@@ -492,9 +491,7 @@ mod tests {
 
     #[test]
     fn test_lexer_read_bytes() {
-        let raw = "bencode";
-
-        let mut bytes = raw.bytes();
+        let mut bytes = "bencode".bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
         let raw_bytes = lexer.read_bytes(3).unwrap();
@@ -505,10 +502,8 @@ mod tests {
     }
 
     #[test]
-    fn test_lexer_position_case1() {
-        let raw = "bencode";
-
-        let mut bytes = raw.bytes();
+    fn test_lexer_position_read_bytes() {
+        let mut bytes = "bencode".bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
         let _ = lexer.read_bytes(3).unwrap();
@@ -519,10 +514,8 @@ mod tests {
     }
 
     #[test]
-    fn test_lexer_position_case2() {
-        let raw = "i56e";
-
-        let mut bytes = raw.bytes();
+    fn test_lexer_position_cache_token() {
+        let mut bytes = "i56e".bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
         let _ = lexer.look_ahead().unwrap();
@@ -533,18 +526,18 @@ mod tests {
     }
 
     #[test]
-    fn test_lexer_position_case3() {
-        let raw = "7:bencode";
-
-        let mut bytes = raw.bytes();
+    fn test_lexer_position_read_i64_before() {
+        let mut bytes = "7:bencode".bytes();
         let mut lexer = Lexer::new(&mut bytes);
 
-        let _ = lexer.look_ahead().unwrap();
+        lexer.read_i64_before(0, b':').unwrap();
+        assert_eq!(0, lexer.position);
+        lexer.read_bytes(1).unwrap();
         assert_eq!(1, lexer.position);
     }
 
     #[test]
-    fn test_lexer_position_case4() {
+    fn test_lexer_position_error() {
         let mut bytes = "i-2-0e".bytes();
         let mut parser = Parser::new(&mut bytes);
 
