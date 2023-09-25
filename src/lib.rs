@@ -296,7 +296,8 @@ where
     where
         T: Iterator<Item = u8>,
     {
-        debug_assert_eq!(Token::IntegerBegin, self.lexer.next_token()?);
+        let token_begin = self.lexer.next_token()?;
+        debug_assert_eq!(Token::IntegerBegin, token_begin);
 
         let (value, read) = self.lexer.read_i64_before(0, b'e')?;
 
@@ -326,7 +327,8 @@ where
     where
         T: Iterator<Item = u8>,
     {
-        debug_assert_eq!(Token::ListBegin, self.lexer.next_token()?);
+        let token_begin = self.lexer.next_token()?;
+        debug_assert_eq!(Token::ListBegin, token_begin);
         let mut list = vec![];
 
         loop {
@@ -358,7 +360,8 @@ where
     where
         T: Iterator<Item = u8>,
     {
-        debug_assert_eq!(Token::DictBegin, self.lexer.next_token()?);
+        let token_begin = self.lexer.next_token()?;
+        debug_assert_eq!(Token::DictBegin, token_begin);
         let mut dict = BDict::new();
         loop {
             match self.lexer.look_ahead()? {
