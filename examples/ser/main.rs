@@ -2,10 +2,10 @@ use bencodex::{BDict, BNode};
 
 fn main() {
     let mut dict = BDict::new();
-    dict.insert("bar".to_string(), BNode::Bytes("spam".bytes().collect()));
-    dict.insert("foo".to_string(), BNode::Integer(42));
+    dict.insert("bar".to_string(), "spam".into());
+    dict.insert("foo".to_string(), 42.into());
 
-    let bnode = BNode::Dict(dict);
+    let bnode: BNode = dict.into();
 
     let mut buf = vec![];
     bnode.serialize(&mut buf).unwrap();

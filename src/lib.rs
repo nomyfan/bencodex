@@ -1,5 +1,7 @@
 #![allow(semicolon_in_expressions_from_macros)]
 
+mod extensions;
+
 use std::{fmt::Display, io::Write};
 pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
@@ -284,10 +286,10 @@ where
         T: Iterator<Item = u8>,
     {
         match self.lexer.look_ahead()? {
-            Token::IntegerBegin => Ok(BNode::Integer(self.parse_integer()?)),
-            Token::Length(_) => Ok(BNode::Bytes(self.parse_bytes()?)),
-            Token::ListBegin => Ok(BNode::List(self.parse_list()?)),
-            Token::DictBegin => Ok(BNode::Dict(self.parse_dict()?)),
+            Token::IntegerBegin => Ok(self.parse_integer()?.into()),
+            Token::Length(_) => Ok(self.parse_bytes()?.into()),
+            Token::ListBegin => Ok(self.parse_list()?.into()),
+            Token::DictBegin => Ok(self.parse_dict()?.into()),
             _ => throw!("invalid input", self.lexer.position),
         }
     }
@@ -332,16 +334,16 @@ where
         loop {
             match self.lexer.look_ahead()? {
                 Token::IntegerBegin => {
-                    list.push(BNode::Integer(self.parse_integer()?));
+                    list.push(self.parse_integer()?.into());
                 }
                 Token::Length(_) => {
-                    list.push(BNode::Bytes(self.parse_bytes()?));
+                    list.push(self.parse_bytes()?.into());
                 }
                 Token::ListBegin => {
-                    list.push(BNode::List(self.parse_list()?));
+                    list.push(self.parse_list()?.into());
                 }
                 Token::DictBegin => {
-                    list.push(BNode::Dict(self.parse_dict()?));
+                    list.push(self.parse_dict()?.into());
                 }
                 _ => {
                     if self.lexer.next_token()? != Token::End {
