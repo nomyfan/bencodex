@@ -30,7 +30,7 @@ pub enum BNode {
 }
 
 impl BNode {
-    pub fn marshal<W>(&self, buf: &mut W) -> std::io::Result<usize>
+    pub fn serialize<W>(&self, buf: &mut W) -> std::io::Result<usize>
     where
         W: Write,
     {
@@ -49,7 +49,7 @@ impl BNode {
             BNode::List(l) => {
                 w += buf.write(b"l")?;
                 for bn in l {
-                    w += bn.marshal(buf)?;
+                    w += bn.serialize(buf)?;
                 }
                 w += buf.write(b"e")?;
             }
@@ -59,7 +59,7 @@ impl BNode {
                     w += buf.write(k.len().to_string().as_bytes())?;
                     w += buf.write(b":")?;
                     w += buf.write(k.as_bytes())?;
-                    w += v.marshal(buf)?;
+                    w += v.serialize(buf)?;
                 }
                 w += buf.write(b"e")?;
             }
@@ -101,7 +101,7 @@ impl Display for BNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         let mut buf = vec![];
 
-        self.marshal(&mut buf).unwrap();
+        self.serialize(&mut buf).unwrap();
         write!(f, "{}", std::str::from_utf8(&buf).unwrap())
     }
 }
@@ -581,7 +581,7 @@ mod tests {
             match parser.parse() {
                 Ok(node) => {
                     let mut buf = vec![];
-                    let _ = node.marshal(&mut buf);
+                    let _ = node.serialize(&mut buf);
                     assert_eq!(cases[i].as_bytes(), &buf)
                 }
                 Err(e) => std::panic::panic_any(e),
@@ -609,7 +609,7 @@ mod tests {
         let bnode = parser.parse().unwrap();
 
         let mut buf = vec![];
-        let _ = bnode.marshal(&mut buf).unwrap();
+        let _ = bnode.serialize(&mut buf).unwrap();
 
         assert_eq!(raw.as_bytes(), &buf);
     }
@@ -660,7 +660,7 @@ mod tests {
         let bnode = parser.parse().unwrap();
 
         let mut buf = Vec::with_capacity(bytes.len());
-        let _ = bnode.marshal(&mut buf);
+        let _ = bnode.serialize(&mut buf);
 
         assert_eq!(&raw.as_bytes(), &buf);
     }

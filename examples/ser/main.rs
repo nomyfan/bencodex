@@ -7,5 +7,7 @@ fn main() {
 
     let bnode = BNode::Dict(dict);
 
-    assert_eq!("d3:bar4:spam3:fooi42ee", bnode.to_string())
+    let mut buf = vec![];
+    bnode.serialize(&mut buf).unwrap();
+    assert_eq!("d3:bar4:spam3:fooi42ee".as_bytes(), buf)
 }

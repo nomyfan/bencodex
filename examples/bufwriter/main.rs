@@ -16,5 +16,5 @@ fn main() {
             .join("bufwriter-test.torrent"),
     )
     .unwrap();
-    bnode.marshal(&mut file).unwrap();
+    bnode.serialize(&mut file).unwrap();
 }
