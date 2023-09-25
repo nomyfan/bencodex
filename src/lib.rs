@@ -1,6 +1,6 @@
 #![allow(semicolon_in_expressions_from_macros)]
 
-use std::{collections::LinkedList, fmt::Display, io::Write};
+use std::{fmt::Display, io::Write};
 pub type BList = Vec<BNode>;
 pub type BDict = std::collections::BTreeMap<String, BNode>;
 
@@ -111,12 +111,10 @@ impl Display for BNode {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Token {
     IntegerBegin,
-    IntegerEnd,
     ListBegin,
-    ListEnd,
     DictBegin,
-    DictEnd,
     Length(i64),
+    End,
     Colon,
     EOF,
 }
@@ -131,7 +129,6 @@ where
     cached_byte: Option<u8>,
     cached_token: Option<Token>,
 
-    token_stack: LinkedList<Token>,
     current_token: Option<Token>,
 }
 
@@ -146,7 +143,6 @@ where
             cached_byte: None,
             cached_token: None,
 
-            token_stack: LinkedList::new(),
             current_token: None,
         }
     }
@@ -231,45 +227,24 @@ where
             Some(unknown) => match unknown {
                 b'i' => {
                     self.current_token = Some(Token::IntegerBegin);
-                    self.token_stack.push_back(Token::IntegerBegin);
 
                     Ok(Token::IntegerBegin)
                 }
                 b'l' => {
                     self.current_token = Some(Token::ListBegin);
-                    self.token_stack.push_back(Token::ListBegin);
 
                     Ok(Token::ListBegin)
                 }
                 b'd' => {
                     self.current_token = Some(Token::DictBegin);
-                    self.token_stack.push_back(Token::DictBegin);
 
                     Ok(Token::DictBegin)
                 }
-                b'e' => match &self.token_stack.pop_back() {
-                    Some(Token::IntegerBegin) => {
-                        self.current_token = None;
+                b'e' => {
+                    self.current_token = Some(Token::End);
 
-                        Ok(Token::IntegerEnd)
-                    }
-                    Some(Token::ListBegin) => {
-                        self.current_token = None;
-
-                        Ok(Token::ListEnd)
-                    }
-                    Some(Token::DictBegin) => {
-                        self.current_token = None;
-
-                        Ok(Token::DictEnd)
-                    }
-                    _ => {
-                        throw!(
-                            "`e` should be the end of integer, list and dictionary.",
-                            self.position
-                        )
-                    }
-                },
+                    Ok(Token::End)
+                }
                 b'0'..=b'9' => {
                     // Get the bytes length until it meets the colon
                     // TODO handle overflow?
@@ -350,7 +325,7 @@ where
     where
         T: Iterator<Item = u8>,
     {
-        assert_eq!(Token::IntegerBegin, self.lexer.next_token()?);
+        debug_assert_eq!(Token::IntegerBegin, self.lexer.next_token()?);
 
         let (value, read) = self.lexer.read_i64_before(0, b'e')?;
 
@@ -358,8 +333,7 @@ where
             throw!("Integer cannot be empty", self.lexer.position)
         }
 
-        assert_eq!(Token::IntegerEnd, self.lexer.next_token()?);
-
+        assert_eq!(Token::End, self.lexer.next_token()?);
         Ok(value)
     }
 
@@ -381,7 +355,7 @@ where
     where
         T: Iterator<Item = u8>,
     {
-        assert_eq!(Token::ListBegin, self.lexer.next_token()?);
+        debug_assert_eq!(Token::ListBegin, self.lexer.next_token()?);
         let mut list = vec![];
 
         loop {
@@ -398,12 +372,12 @@ where
                 Token::DictBegin => {
                     list.push(BNode::Dict(self.parse_dict()?));
                 }
-                Token::ListEnd => {
-                    self.lexer.next_token()?;
-                    return Ok(list);
-                }
                 _ => {
-                    throw!("invalid list", self.lexer.position);
+                    if self.lexer.next_token()? != Token::End {
+                        throw!("invalid list", self.lexer.position);
+                    }
+
+                    return Ok(list);
                 }
             }
         }
@@ -418,16 +392,17 @@ where
         loop {
             match self.lexer.look_ahead()? {
                 Token::Length(_) => {
-                    let raw_key = self.parse_bytes()?;
-                    let key = String::from_utf8(raw_key).unwrap();
+                    let key = String::from_utf8(self.parse_bytes()?).unwrap();
                     let value = self.parse_node()?;
                     dict.insert(key, value);
                 }
-                Token::DictEnd => {
-                    self.lexer.next_token()?;
+                _ => {
+                    if self.lexer.next_token()? != Token::End {
+                        throw!("invalid dictionary", self.lexer.position)
+                    }
+
                     return Ok(dict);
                 }
-                _ => throw!("invalid dictionary", self.lexer.position),
             }
         }
     }
