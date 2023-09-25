@@ -17,19 +17,3 @@ license = "MIT"
 [lib]
 path = "src/lib.rs"
 name = "bencodex"
-
-[[bin]]
-name = "example_ser"
-path = "examples/ser/main.rs"
-
-[[bin]]
-name = "example_de"
-path = "examples/de/main.rs"
-
-[[bin]]
-name = "example_bufreader"
-path = "examples/bufreader/main.rs"
-
-[[bin]]
-name = "example_bufwriter"
-path = "examples/bufwriter/main.rs"

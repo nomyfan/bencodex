@@ -1,5 +1,3 @@
-#![allow(semicolon_in_expressions_from_macros)]
-
 mod extensions;
 
 use std::{fmt::Display, io::Write};
@@ -17,7 +15,7 @@ macro_rules! throw {
         return Err(Error {
             msg: $msg.into(),
             position: $pos,
-        });
+        })
     };
 }
 
