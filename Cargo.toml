@@ -1,6 +1,6 @@
 [package]
 name = "bencodex"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["nomyfan <Nomyfan@live.com>"]
 edition = "2021"
 description = "bencode parser"
