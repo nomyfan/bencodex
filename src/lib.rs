@@ -213,7 +213,7 @@ where
                 None => {
                     throw!(
                         format!(
-                            "stream's length is expected to be {}, but it's {}.",
+                            "bytes's length is expected to be {}, but it's {}.",
                             len,
                             ret.len()
                         ),
@@ -275,7 +275,7 @@ where
                     }
                 },
                 b'0'..=b'9' => {
-                    // Get the stream length until it meets the colon
+                    // Get the bytes length until it meets the colon
                     // TODO handle overflow?
                     let (length, _) = self.read_i64_before((unknown - b'0') as i64, b':')?;
                     self.current_token = Some(Token::Length(length));
@@ -288,7 +288,7 @@ where
 
                         Ok(Token::Colon)
                     }
-                    _ => throw!("`:` should be after the length of stream.", self.position),
+                    _ => throw!("`:` should be after the length of bytes.", self.position),
                 },
                 _ => throw!(format!("unknown token: {}", unknown), self.position),
             },
@@ -329,7 +329,7 @@ where
     where
         T: Iterator<Item = u8>,
     {
-        let node = self.parse_internal()?;
+        let node = self.parse_node()?;
 
         match self.lexer.next_token()? {
             Token::EOF => Ok(node),
@@ -337,7 +337,7 @@ where
         }
     }
 
-    fn parse_internal(&mut self) -> Result<BNode>
+    fn parse_node(&mut self) -> Result<BNode>
     where
         T: Iterator<Item = u8>,
     {
@@ -424,7 +424,7 @@ where
                 Token::Length(_) => {
                     let raw_key = self.parse_bytes()?;
                     let key = String::from_utf8(raw_key).unwrap();
-                    let value = self.parse_internal()?;
+                    let value = self.parse_node()?;
                     dict.insert(key, value);
                 }
                 Token::DictEnd => {
