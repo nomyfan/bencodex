@@ -128,8 +128,6 @@ where
     position: i64,
     cached_byte: Option<u8>,
     cached_token: Option<Token>,
-
-    current_token: Option<Token>,
 }
 
 impl<'a, T> Lexer<'a, T>
@@ -142,8 +140,6 @@ where
             position: -1,
             cached_byte: None,
             cached_token: None,
-
-            current_token: None,
         }
     }
 
@@ -225,42 +221,17 @@ where
 
         match self.next_byte() {
             Some(unknown) => match unknown {
-                b'i' => {
-                    self.current_token = Some(Token::IntegerBegin);
-
-                    Ok(Token::IntegerBegin)
-                }
-                b'l' => {
-                    self.current_token = Some(Token::ListBegin);
-
-                    Ok(Token::ListBegin)
-                }
-                b'd' => {
-                    self.current_token = Some(Token::DictBegin);
-
-                    Ok(Token::DictBegin)
-                }
-                b'e' => {
-                    self.current_token = Some(Token::End);
-
-                    Ok(Token::End)
-                }
+                b'i' => Ok(Token::IntegerBegin),
+                b'l' => Ok(Token::ListBegin),
+                b'd' => Ok(Token::DictBegin),
+                b'e' => Ok(Token::End),
                 b'0'..=b'9' => {
                     // Get the bytes length until it meets the colon
                     // TODO handle overflow?
                     let (length, _) = self.read_i64_before((unknown - b'0') as i64, b':')?;
-                    self.current_token = Some(Token::Length(length));
-
                     Ok(Token::Length(length))
                 }
-                b':' => match &self.current_token {
-                    Some(Token::Length(_)) => {
-                        self.current_token = Some(Token::Colon);
-
-                        Ok(Token::Colon)
-                    }
-                    _ => throw!("`:` should be after the length of bytes.", self.position),
-                },
+                b':' => Ok(Token::Colon),
                 _ => throw!(format!("unknown token: {}", unknown), self.position),
             },
             None => Ok(Token::EOF),
